@@ -72,3 +72,4 @@ data/
 # Ignore dataset
 ShuttleCockFrameDataset/ 
 processed_data/
+processed_data.zip

@@ -8,7 +8,7 @@ Design and implement a **novel AI system** for detecting and tracking shuttlecoc
 ---
 
 ## 🚀 Key Innovations
-- **Hybrid CNN + Transformer Backbone:** Combines CNN's spatial precision with a TransformerEncoder's temporal modeling.
+- **Hybrid CNN + Temporal Transformer Backbone:** Combines CNN's spatial precision with a TransformerEncoder's temporal modeling.
 - **Temporal Fusion:** Multi-frame input for motion context.
 - **Frame Difference Module:** Explicit motion guidance.
 - **Trajectory Inpainting:** Fills detection gaps using spatiotemporal consistency.
@@ -39,7 +39,7 @@ Design and implement a **novel AI system** for detecting and tracking shuttlecoc
     ```
 - **Tip:** For low-resource machines, use `device: cpu` and a small `batch_size` (e.g., 2 or 4).
 
-### 1. **Install Dependencies**
+### 1. **Install Requirements**
 ```bash
 pip install -r requirements.txt
 ```
@@ -99,31 +99,13 @@ python utils/benchmark.py --ours predictions.csv --baseline baseline.csv --gt gr
 
 ---
 
-## 📎 Dependencies
-- PyTorch ≥ 2.0
-- OpenCV
-- tqdm, matplotlib, albumentations, streamlit
-
----
-
-## 👥 Authors & Contact
-- Project Lead: [@mahe](mailto:mahe@example.com)
-- Research Engineer: TBA
-- Visualization/Frontend: TBA
-- Contact: ai-badminton@project.org
-
----
-
 ## 📘 References
 - TrackNetV2/V3 (NCTU, 2019–2021)
 - TrackFormer (ECCV 2022)
-- ViViT: Video Vision Transformers (Google Research)
 - Swin Transformer (Microsoft Research)
 - ShuttleSet Dataset (CoachAI)
 
 ---
 
-## ✅ Status
-- Research + Prototype Phase
-- Model Architecture Finalized
-- Training & Inference Pipeline Complete
+## 📫 Contact
+maheshsharan28@gmail.com
