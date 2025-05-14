@@ -12,7 +12,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ShuttleTrack Inference')
     parser.add_argument('--video', type=str, required=True, help='Path to input video')
     parser.add_argument('--output', type=str, default='predictions.csv', help='Path to output predictions CSV')
-    parser.add_argument('--checkpoint', type=str, default='checkpoint_best.pth', help='Path to model checkpoint')
+    parser.add_argument('--checkpoint', type=str, default='checkpoints/checkpoint_best.pth', help='Path to model checkpoint')
     args = parser.parse_args()
 
     config = load_config('config/shuttletrack.yaml')

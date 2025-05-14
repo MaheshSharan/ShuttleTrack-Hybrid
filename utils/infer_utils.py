@@ -12,6 +12,7 @@ def load_checkpoint(model, path, device):
     return model
 
 def preprocess_frame(frame, size=224):
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     frame = cv2.resize(frame, (size, size))
     frame = frame.astype(float) / 255.0
     return frame 

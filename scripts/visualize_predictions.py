@@ -21,7 +21,7 @@ if __name__ == '__main__':
     config = load_config('config/shuttletrack.yaml')
     device = torch.device(config['device'] if torch.cuda.is_available() and config['device'] == 'cuda' else 'cpu')
     model = build_model_from_config(config).to(device)
-    model = load_checkpoint(model, 'checkpoint_best.pth', device)
+    model = load_checkpoint(model, 'checkpoints/checkpoint_best.pth', device)
     model.eval()
     dataset = ShuttleTrackDataset('processed_data', split='valid', sequence_length=config['model']['sequence_length'], augment=False)
     # Visualize the first batch

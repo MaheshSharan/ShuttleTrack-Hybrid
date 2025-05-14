@@ -97,6 +97,8 @@ def main():
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['training']['epochs'])
     # TensorBoard writer
     writer = SummaryWriter(log_dir='runs/shuttletrack')
+    # Ensure checkpoints directory exists
+    os.makedirs('checkpoints', exist_ok=True)
     # Training loop
     best_val_loss = float('inf')
     for epoch in range(1, config['training']['epochs'] + 1):
@@ -118,10 +120,10 @@ def main():
         # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            save_checkpoint(model, optimizer, epoch, val_loss, f'checkpoint_best.pth')
+            save_checkpoint(model, optimizer, epoch, val_loss, f'checkpoints/checkpoint_best.pth')
             print('  [*] Saved new best model!')
         # Save last model
-        save_checkpoint(model, optimizer, epoch, val_loss, f'checkpoint_last.pth')
+        save_checkpoint(model, optimizer, epoch, val_loss, f'checkpoints/checkpoint_last.pth')
     writer.close()
 
 if __name__ == '__main__':

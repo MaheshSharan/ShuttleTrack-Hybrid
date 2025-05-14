@@ -14,7 +14,7 @@ if __name__ == '__main__':
     print('labels:', sample['labels'].shape)
     # Visualize the first frame and diff
     frame = sample['frames'][0].permute(1, 2, 0).numpy()
-    diff = sample['diffs'][0].numpy()  # Already (H, W, C)
+    diff = sample['diffs'][0].permute(1, 2, 0).numpy()  # Convert (C, H, W) to (H, W, C)
     print('diff image shape:', diff.shape)
     fig, axs = plt.subplots(1, 2, figsize=(8, 4))
     axs[0].imshow(frame)

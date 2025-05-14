@@ -24,7 +24,8 @@ def process_segment(frames_dir, csv_file, out_frames_dir, out_diffs_dir, out_lab
     prev_img = None
     for i, frame_file in enumerate(frame_files):
         img = cv2.imread(os.path.join(frames_dir, frame_file))
-        img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+        # Do NOT resize
+        # img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
         img = img.astype(np.float32) / 255.0
         frames.append(img)
         # Frame difference
@@ -36,7 +37,8 @@ def process_segment(frames_dir, csv_file, out_frames_dir, out_diffs_dir, out_lab
         prev_img = img
         # Label
         row = df.iloc[i]
-        label = [row['Visibility'], row['X'] / img.shape[1], row['Y'] / img.shape[0]]  # Normalize X, Y
+        original_h, original_w = img.shape[0], img.shape[1]
+        label = [row['Visibility'], row['X'] / original_w, row['Y'] / original_h]  # Normalize X, Y using original size
         labels.append(label)
         # Save processed frame and diff as images (optional, for debugging)
         cv2.imwrite(os.path.join(out_frames_dir, frame_file), (img * 255).astype(np.uint8))
