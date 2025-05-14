@@ -1,0 +1,22 @@
+# ShuttleTrack Model Configuration
+
+model:
+  type: hybrid  # options: cnn, hybrid
+  cnn_backbone: resnet18  # options: resnet18, resnet34, etc.
+  input_size: 224
+  sequence_length: 5
+  transformer_nhead: 4  # number of attention heads for TransformerEncoder
+  transformer_layers: 2  # number of TransformerEncoder layers
+  use_frame_diff: true
+  use_trajectory_inpainting: true
+
+device: cuda  # options: cuda, cpu
+
+training:
+  batch_size: 16
+  num_workers: 4
+  epochs: 50
+  learning_rate: 0.0005
+  weight_decay: 0.01
+  scheduler: cosine
+  warmup_epochs: 5 

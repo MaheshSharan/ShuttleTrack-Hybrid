@@ -1,0 +1,8 @@
+torch>=2.0
+opencv-python
+wrapt==1.14.1
+tqdm
+matplotlib
+albumentations
+pandas 
+streamlit
