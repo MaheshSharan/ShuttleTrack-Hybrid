@@ -13,7 +13,7 @@ model:
 device: cuda  # options: cuda, cpu
 
 training:
-  batch_size: 16
+  batch_size: 4
   num_workers: 4
   epochs: 50
   learning_rate: 0.0005
