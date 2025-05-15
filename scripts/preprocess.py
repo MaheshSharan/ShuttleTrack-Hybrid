@@ -3,12 +3,26 @@ import cv2
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import yaml
 
-DATASET_ROOT = 'ShuttleCockFrameDataset'
-OUTPUT_ROOT = 'processed_data'
+# Load config
+def load_config(path='config/shuttletrack.yaml'):
+    try:
+        with open(path, 'r') as f:
+            config = yaml.safe_load(f)
+        return config
+    except (FileNotFoundError, yaml.YAMLError):
+        print(f"Warning: Could not load {path}, using default paths")
+        return {}
+
+# Get paths from config or use defaults
+config = load_config()
+DATASET_ROOT = config.get('data', {}).get('raw_dataset_path', 'ShuttleCockFrameDataset')
+OUTPUT_ROOT = config.get('data', {}).get('processed_dataset_path', 'processed_data')
 SPLITS = ['Train', 'valid']
-IMG_SIZE = 256
 
+print(f"Using raw dataset: {DATASET_ROOT}")
+print(f"Output will be saved to: {OUTPUT_ROOT}")
 
 def ensure_dir(path):
     if not os.path.exists(path):

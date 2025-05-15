@@ -1,5 +1,9 @@
 # ShuttleTrack Model Configuration
 
+data:
+  raw_dataset_path: ShuttleCockFrameDataset  # Path to raw dataset
+  processed_dataset_path: processed_data    # Path for preprocessed output
+
 model:
   type: hybrid  # options: cnn, hybrid
   cnn_backbone: resnet18  # options: resnet18, resnet34, etc.
