@@ -1,33 +1,29 @@
-# ShuttleTrack Model Configuration
-
 data:
-  raw_dataset_path: /kaggle/input/shuttlecockframedataset/ShuttleCockFrameDataset
-  processed_dataset_path: /kaggle/working/ShuttleTrack-Hybrid
   exclude_matches:
-    - match26
-    - match25
-    - match24
-    - match23
-    - match22
-    - match21
-    
+  - match26
+  - match25
+  - match24
+  - match23
+  - match22
+  - match21
+  processed_dataset_path: /kaggle/working/ShuttleTrack-Hybrid
+  raw_dataset_path: /kaggle/input/shuttlecockframedataset/ShuttleCockFrameDataset
+device: cuda
 model:
-  type: hybrid  # options: cnn, hybrid
-  cnn_backbone: resnet18  # options: resnet18, resnet34, etc.
+  cnn_backbone: resnet18
   input_size: 224
   sequence_length: 5
-  transformer_nhead: 4  # number of attention heads for TransformerEncoder
-  transformer_layers: 2  # number of TransformerEncoder layers
+  transformer_layers: 2
+  transformer_nhead: 4
+  type: hybrid
   use_frame_diff: true
   use_trajectory_inpainting: true
-
-device: cuda  # options: cuda, cpu
-
 training:
-  batch_size: 4
-  num_workers: 2
+  batch_size: 32
   epochs: 50
   learning_rate: 0.0005
-  weight_decay: 0.01
+  num_workers: 16
+  persistent_workers: true
   scheduler: cosine
-  warmup_epochs: 5 
+  warmup_epochs: 5
+  weight_decay: 0.01

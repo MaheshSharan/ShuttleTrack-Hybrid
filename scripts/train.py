@@ -87,8 +87,15 @@ def main():
     print(f'Using device: {device}')
 
     # Data
-    train_set = ShuttleTrackDataset('processed_data', split='Train', sequence_length=config['model']['sequence_length'], augment=True)
-    valid_set = ShuttleTrackDataset('processed_data', split='valid', sequence_length=config['model']['sequence_length'], augment=False)
+    input_size_cfg = config['model']['input_size'] # Get input_size from model config
+    # Ensure input_size is a tuple (height, width) if it's a single int
+    if isinstance(input_size_cfg, int):
+        input_size_tuple = (input_size_cfg, input_size_cfg)
+    else:
+        input_size_tuple = tuple(input_size_cfg)
+
+    train_set = ShuttleTrackDataset(config['data']['processed_dataset_path'], split='Train', sequence_length=config['model']['sequence_length'], augment=True, input_size=input_size_tuple)
+    valid_set = ShuttleTrackDataset(config['data']['processed_dataset_path'], split='valid', sequence_length=config['model']['sequence_length'], augment=False, input_size=input_size_tuple)
     train_loader = DataLoader(train_set, batch_size=config['training']['batch_size'], shuffle=True, num_workers=config['training']['num_workers'], pin_memory=(device.type == 'cuda'))
     valid_loader = DataLoader(valid_set, batch_size=config['training']['batch_size'], shuffle=False, num_workers=config['training']['num_workers'], pin_memory=(device.type == 'cuda'))
 

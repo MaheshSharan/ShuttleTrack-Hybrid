@@ -1,0 +1,12 @@
+{
+    "title": "ShuttleTrack-ProcessedData",
+    "id": "maheshsharan/shuttletrack-processeddata",
+    "subtitle": "Preprocessed shuttlecock tracking dataset ready for training",
+    "description": "Preprocessed version of ShuttleCockFrameDataset with extracted frames, frame differences, and normalized labels for shuttlecock detection and tracking.",
+    "isPrivate": true,
+    "licenses": [
+      {
+        "name": "CC0-1.0"
+      }
+    ]
+  }
