@@ -6,7 +6,7 @@ data:
   - match23
   - match22
   - match21
-  processed_dataset_path: /kaggle/working/ShuttleTrack-Hybrid
+  processed_dataset_path: /kaggle/working/ShuttleTrack-Hybrid/processed_data
   raw_dataset_path: /kaggle/input/shuttlecockframedataset/ShuttleCockFrameDataset
 device: cuda
 model:
