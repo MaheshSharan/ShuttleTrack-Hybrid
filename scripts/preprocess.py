@@ -3,50 +3,63 @@ import cv2
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from utils import load_config, ensure_dir
+import yaml
 
 # Load config
+def load_config(path='config/shuttletrack.yaml'):
+    try:
+        with open(path, 'r') as f:
+            config = yaml.safe_load(f)
+        return config
+    except (FileNotFoundError, yaml.YAMLError):
+        print(f"Warning: Could not load {path}, using default paths")
+        return {}
+
+# Get paths from config or use defaults
 config = load_config()
 DATASET_ROOT = config.get('data', {}).get('raw_dataset_path', 'ShuttleCockFrameDataset')
 OUTPUT_ROOT = config.get('data', {}).get('processed_dataset_path', 'processed_data')
-EXCLUDE_MATCHES = config.get('data', {}).get('exclude_matches', [])  # NEW
+EXCLUDE_MATCHES = set(config.get('data', {}).get('exclude_matches', []))
 SPLITS = ['Train', 'valid']
 
+print(f"Using raw dataset: {DATASET_ROOT}")
+print(f"Output will be saved to: {OUTPUT_ROOT}")
+print(f"Excluded matches: {EXCLUDE_MATCHES}")
+
+def ensure_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
 def process_segment(frames_dir, csv_file, out_frames_dir, out_diffs_dir, out_labels_file):
+    frame_files = sorted(os.listdir(frames_dir))
     df = pd.read_csv(csv_file)
-    df = df.dropna().reset_index(drop=True)
-
+    prev_img = None
     labels = []
-    for i, row in df.iterrows():
-        frame_file = os.path.join(frames_dir, f"{int(row['frame'])}.jpg")
-        if not os.path.exists(frame_file):
-            continue
-
-        frame = cv2.imread(frame_file)
-        next_frame_file = os.path.join(frames_dir, f"{int(row['frame']) + 1}.jpg")
-        if not os.path.exists(next_frame_file):
-            continue
-
-        next_frame = cv2.imread(next_frame_file)
-        diff = cv2.absdiff(next_frame, frame)
-
-        frame_out_path = os.path.join(out_frames_dir, f"{i:04d}.jpg")
-        diff_out_path = os.path.join(out_diffs_dir, f"{i:04d}.jpg")
-        cv2.imwrite(frame_out_path, frame)
-        cv2.imwrite(diff_out_path, diff)
-
-        labels.append([row['x'], row['y']])
-
-    if labels:
-        np.save(out_labels_file, np.array(labels, dtype=np.float32))
+    for i, frame_file in enumerate(frame_files):
+        img = cv2.imread(os.path.join(frames_dir, frame_file))
+        img = img.astype(np.float32) / 255.0
+        # Frame difference
+        if prev_img is not None:
+            diff = cv2.absdiff(img, prev_img)
+        else:
+            diff = np.zeros_like(img)
+        prev_img = img
+        # Label
+        row = df.iloc[i]
+        original_h, original_w = img.shape[0], img.shape[1]
+        label = [row['Visibility'], row['X'] / original_w, row['Y'] / original_h]
+        labels.append(label)
+        # Save processed frame and diff as images
+        ensure_dir(out_frames_dir)
+        ensure_dir(out_diffs_dir)
+        cv2.imwrite(os.path.join(out_frames_dir, frame_file), (img * 255).astype(np.uint8))
+        cv2.imwrite(os.path.join(out_diffs_dir, frame_file), (diff * 255).astype(np.uint8))
+    np.save(out_labels_file, np.array(labels, dtype=np.float32))
 
 def process_split(split):
     split_path = os.path.join(DATASET_ROOT, split)
     matches = [d for d in os.listdir(split_path) if d.startswith('match')]
-
-    # Exclude matches defined in config
     matches = [m for m in matches if m not in EXCLUDE_MATCHES]
-    print(f"[INFO] Excluding matches in '{split}': {EXCLUDE_MATCHES}")
 
     with tqdm(matches, desc=f'Processing {split}', position=0, leave=True) as match_bar:
         for match in match_bar:
@@ -66,6 +79,7 @@ def process_split(split):
 def main():
     for split in SPLITS:
         process_split(split)
+    print('Preprocessing complete!')
 
 if __name__ == '__main__':
     main()
