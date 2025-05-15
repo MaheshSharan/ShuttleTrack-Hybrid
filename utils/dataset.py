@@ -8,7 +8,7 @@ from albumentations.pytorch import ToTensorV2
 import cv2
 
 class ShuttleTrackDataset(Dataset):
-    def __init__(self, root_dir, split='Train', sequence_length=5, augment=True):
+    def __init__(self, root_dir, split='train', sequence_length=5, augment=True):
         self.root_dir = root_dir
         self.split = split
         self.sequence_length = sequence_length
