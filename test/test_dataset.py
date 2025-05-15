@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.dataset import ShuttleTrackDataset
 
 if __name__ == '__main__':
-    dataset = ShuttleTrackDataset(root_dir='processed_data', split='Train', sequence_length=5, augment=False)
+    dataset = ShuttleTrackDataset(root_dir='processed_data', split='train', sequence_length=5, augment=False)
     print(f'Total samples: {len(dataset)}')
     sample = dataset[0]
     print('frames:', sample['frames'].shape)
