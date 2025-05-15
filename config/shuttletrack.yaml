@@ -1,8 +1,8 @@
 # ShuttleTrack Model Configuration
 
 data:
-  raw_dataset_path: ShuttleCockFrameDataset  # Path to raw dataset
-  processed_dataset_path: processed_data    # Path for preprocessed output
+  raw_dataset_path: /kaggle/input/shuttlecockframedataset/ShuttleCockFrameDataset  # Path to raw dataset
+  processed_dataset_path: /kaggle/working/ShuttleTrack-Hybrid    # Path for preprocessed output
 
 model:
   type: hybrid  # options: cnn, hybrid
