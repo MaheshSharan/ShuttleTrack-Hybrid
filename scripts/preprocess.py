@@ -18,31 +18,28 @@ def ensure_dir(path):
 def process_segment(frames_dir, csv_file, out_frames_dir, out_diffs_dir, out_labels_file):
     frame_files = sorted(os.listdir(frames_dir))
     df = pd.read_csv(csv_file)
-    frames = []
-    diffs = []
-    labels = []
     prev_img = None
+    labels = []
     for i, frame_file in enumerate(frame_files):
         img = cv2.imread(os.path.join(frames_dir, frame_file))
-        # Do NOT resize
-        # img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
         img = img.astype(np.float32) / 255.0
-        frames.append(img)
         # Frame difference
         if prev_img is not None:
             diff = cv2.absdiff(img, prev_img)
         else:
             diff = np.zeros_like(img)
-        diffs.append(diff)
         prev_img = img
         # Label
         row = df.iloc[i]
         original_h, original_w = img.shape[0], img.shape[1]
-        label = [row['Visibility'], row['X'] / original_w, row['Y'] / original_h]  # Normalize X, Y using original size
+        label = [row['Visibility'], row['X'] / original_w, row['Y'] / original_h]
         labels.append(label)
-        # Save processed frame and diff as images (optional, for debugging)
+        # Save processed frame and diff as images
+        ensure_dir(out_frames_dir)
+        ensure_dir(out_diffs_dir)
         cv2.imwrite(os.path.join(out_frames_dir, frame_file), (img * 255).astype(np.uint8))
         cv2.imwrite(os.path.join(out_diffs_dir, frame_file), (diff * 255).astype(np.uint8))
+        # No need to store img or diff in a list!
     np.save(out_labels_file, np.array(labels, dtype=np.float32))
 
 
