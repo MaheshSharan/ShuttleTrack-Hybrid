@@ -8,7 +8,15 @@ def load_config(path):
 
 def load_checkpoint(model, path, device):
     checkpoint = torch.load(path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    state_dict = checkpoint['model_state_dict']
+    # Remove 'module.' prefix if present (from DataParallel)
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith('module.'):
+            new_state_dict[k[7:]] = v
+        else:
+            new_state_dict[k] = v
+    model.load_state_dict(new_state_dict)
     return model
 
 def preprocess_frame(frame, size=224):

@@ -1,13 +1,6 @@
 data:
-  exclude_matches:
-  - match26
-  - match25
-  - match24
-  - match23
-  - match22
-  - match21
-  processed_dataset_path: /kaggle/working/ShuttleTrack-Hybrid/processed_data
-  raw_dataset_path: /kaggle/input/shuttlecockframedataset/ShuttleCockFrameDataset
+  processed_dataset_path: processed_data
+  raw_dataset_path: ShuttleCockFrameDataset
 device: cuda
 model:
   cnn_backbone: resnet18

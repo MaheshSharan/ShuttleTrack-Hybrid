@@ -71,15 +71,14 @@ class HybridCNNTransformer(nn.Module):
         x = torch.cat([frames, diffs], dim=2)  # (B, T, 2*C, H, W)
         
         # Reshape x to (B*T, 2*C, H, W) for the CNN
-        # The number of channels for the concatenated input is x.shape[2] after cat
         x = x.view(B * T, x.shape[2], H, W)
 
-        # Explicitly convert to FloatTensor and scale if it's ByteTensor
-        if x.dtype == torch.uint8 or x.dtype == torch.byte:
+        # Explicitly convert to FloatTensor and scale if it's uint8
+        if x.dtype == torch.uint8:
             x = x.float() / 255.0
-        elif x.dtype != torch.float32: # Handle other potential non-float types if necessary
-            x = x.float() # Or handle specific conversions as needed
-            
+        elif x.dtype != torch.float32:
+            x = x.float()
+        
         feats = self.cnn(x)  # (B*T, F, h, w)
         feats = self.cnn_proj(feats)  # (B*T, feature_dim, h, w)
         feats = self.avgpool(feats).view(B, T, self.feature_dim)  # (B, T, feature_dim)
