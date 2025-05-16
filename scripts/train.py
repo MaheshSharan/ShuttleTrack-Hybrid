@@ -90,7 +90,7 @@ def main():
     config = load_config('config/shuttletrack.yaml')
 
     if args.kaggle:
-        config['data']['processed_dataset_path'] = '/kaggle/input/shuttletrack-processed-data'
+        config['data']['processed_dataset_path'] = '/kaggle/input/shuttletrack-processed-data/processed_data'
         config['data']['raw_dataset_path'] = '/kaggle/input/shuttlecockframedataset'
 
     device = torch.device(config['device'] if torch.cuda.is_available() and config['device'] == 'cuda' else 'cpu')
