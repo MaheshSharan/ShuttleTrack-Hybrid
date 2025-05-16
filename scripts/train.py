@@ -97,8 +97,7 @@ def main():
     print(f'Using device: {device}')
 
     # Data
-    input_size_cfg = config['model']['input_size'] # Get input_size from model config
-    # Ensure input_size is a tuple (height, width) if it's a single int
+    input_size_cfg = config['model']['input_size']
     if isinstance(input_size_cfg, int):
         input_size_tuple = (input_size_cfg, input_size_cfg)
     else:
@@ -125,9 +124,23 @@ def main():
     # Ensure checkpoints directory exists
     os.makedirs('checkpoints', exist_ok=True)
 
+    # --- Resume logic ---
+    start_epoch = 1
+    checkpoint_path = 'checkpoints/checkpoint_last.pth'
+    if os.path.exists(checkpoint_path):
+        print(f"[INFO] Found checkpoint at {checkpoint_path}. Loading...")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        best_val_loss = checkpoint['loss']
+        print(f"[INFO] Resumed training from epoch {start_epoch}. Best validation loss so far: {best_val_loss:.4f}")
+    else:
+        best_val_loss = float('inf')
+        print("[INFO] No checkpoint found. Starting training from scratch.")
+
     # Training loop
-    best_val_loss = float('inf')
-    for epoch in range(1, config['training']['epochs'] + 1):
+    for epoch in range(start_epoch, config['training']['epochs'] + 1):
         print(f'\nEpoch {epoch}/{config["training"]["epochs"]}')
         train_bce, train_mse, train_smooth = train_one_epoch(model, train_loader, optimizer, device)
         val_bce, val_mse, val_smooth = validate(model, valid_loader, device)
@@ -153,6 +166,7 @@ def main():
 
         # Save last model
         save_checkpoint(model, optimizer, epoch, val_loss, f'checkpoints/checkpoint_last.pth')
+        print(f'  [*] Saved checkpoint for epoch {epoch}.')
 
     writer.close()
 
