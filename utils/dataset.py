@@ -6,6 +6,7 @@ import random
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import cv2
+import time
 
 class ShuttleTrackDataset(Dataset):
     def __init__(self, root_dir, split='train', sequence_length=5, augment=True, input_size=224):
@@ -78,50 +79,67 @@ class ShuttleTrackDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
+        t0 = time.time()
         sample = self.samples[idx]
-        
+        t1 = time.time()
         frames_resized_list = []
         diffs_resized_list = []
-
+        image_load_time = 0
+        resize_time = 0
         for frame_filename in sample['frame_files']:
+            t_img_start = time.time()
             frame_path = os.path.join(sample['frames_dir'], frame_filename)
             frame = cv2.imread(frame_path)
             if frame is None:
                 raise IOError(f"Could not read frame image: {frame_path}")
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            t_img_end = time.time()
+            image_load_time += t_img_end - t_img_start
+            t_resize_start = time.time()
             frame_resized = cv2.resize(frame, self.cv_resize_dsize, interpolation=cv2.INTER_LINEAR)
             frames_resized_list.append(frame_resized)
+            t_resize_end = time.time()
+            resize_time += t_resize_end - t_resize_start
 
-            diff_path = os.path.join(sample['diffs_dir'], frame_filename) # Assuming diffs have same filenames
+            diff_path = os.path.join(sample['diffs_dir'], frame_filename)
             diff = cv2.imread(diff_path)
             if diff is None:
                 raise IOError(f"Could not read diff image: {diff_path}")
             diff = cv2.cvtColor(diff, cv2.COLOR_BGR2RGB)
+            t_img_end2 = time.time()
+            image_load_time += t_img_end2 - t_resize_end
+            t_resize_start2 = time.time()
             diff_resized = cv2.resize(diff, self.cv_resize_dsize, interpolation=cv2.INTER_LINEAR)
             diffs_resized_list.append(diff_resized)
-        
-        if self.augment and random.random() < 0.2: # Temporal dropout
+            t_resize_end2 = time.time()
+            resize_time += t_resize_end2 - t_resize_start2
+        t2 = time.time()
+        aug_time = 0
+        if self.augment and random.random() < 0.2:
             drop_idx = random.randint(0, self.sequence_length - 1)
             frames_resized_list[drop_idx] = np.zeros_like(frames_resized_list[drop_idx])
             diffs_resized_list[drop_idx] = np.zeros_like(diffs_resized_list[drop_idx])
-            
         final_frames_tensors = []
         final_diffs_tensors = []
-
         for f_resized, d_resized in zip(frames_resized_list, diffs_resized_list):
+            t_aug_start = time.time()
             augmented = self.transform(image=f_resized, diff_image=d_resized)
+            t_aug_end = time.time()
+            aug_time += t_aug_end - t_aug_start
             final_frames_tensors.append(augmented['image'])
             final_diffs_tensors.append(augmented['diff_image'])
-
-        frames_stacked = torch.stack(final_frames_tensors, dim=0)
-        diffs_stacked = torch.stack(final_diffs_tensors, dim=0)
-        
+        t3 = time.time()
+        label_load_start = time.time()
         all_labels_np = np.load(sample['labels_path'])
         labels_for_sequence_np = all_labels_np[sample['label_indices']]
         labels_tensor = torch.tensor(labels_for_sequence_np, dtype=torch.float32)
-
+        label_load_end = time.time()
+        t4 = time.time()
+        # Only print for first 100 calls
+        if idx < 100:
+            print(f"[__getitem__ idx={idx}] sample lookup: {t1-t0:.4f}s, image load: {image_load_time:.4f}s, resize: {resize_time:.4f}s, augmentation: {aug_time:.4f}s, label load: {label_load_end-label_load_start:.4f}s, total: {t4-t0:.4f}s")
         return {
-            'frames': frames_stacked,
-            'diffs': diffs_stacked,
+            'frames': torch.stack(final_frames_tensors, dim=0),
+            'diffs': torch.stack(final_diffs_tensors, dim=0),
             'labels': labels_tensor
         } 
