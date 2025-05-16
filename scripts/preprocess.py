@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import yaml
+from concurrent.futures import ThreadPoolExecutor
 
 # Load config
 def load_config(path='config/shuttletrack.yaml'):
@@ -65,16 +66,19 @@ def process_split(split):
         for match in match_bar:
             match_path = os.path.join(split_path, match)
             segments = os.listdir(os.path.join(match_path, 'frames'))
-            with tqdm(segments, desc=f'  {match}', position=1, leave=False) as segment_bar:
-                for segment in segment_bar:
-                    frames_dir = os.path.join(match_path, 'frames', segment)
-                    csv_file = os.path.join(match_path, 'csv', f'{segment}_ball.csv')
-                    out_frames_dir = os.path.join(OUTPUT_ROOT, split, match, segment, 'frames')
-                    out_diffs_dir = os.path.join(OUTPUT_ROOT, split, match, segment, 'diffs')
-                    out_labels_file = os.path.join(OUTPUT_ROOT, split, match, segment, 'labels.npy')
-                    ensure_dir(out_frames_dir)
-                    ensure_dir(out_diffs_dir)
-                    process_segment(frames_dir, csv_file, out_frames_dir, out_diffs_dir, out_labels_file)
+            segment_args = []
+            for segment in segments:
+                frames_dir = os.path.join(match_path, 'frames', segment)
+                csv_file = os.path.join(match_path, 'csv', f'{segment}_ball.csv')
+                out_frames_dir = os.path.join(OUTPUT_ROOT, split, match, segment, 'frames')
+                out_diffs_dir = os.path.join(OUTPUT_ROOT, split, match, segment, 'diffs')
+                out_labels_file = os.path.join(OUTPUT_ROOT, split, match, segment, 'labels.npy')
+                ensure_dir(out_frames_dir)
+                ensure_dir(out_diffs_dir)
+                segment_args.append((frames_dir, csv_file, out_frames_dir, out_diffs_dir, out_labels_file))
+            # Parallel processing of segments
+            with ThreadPoolExecutor(max_workers=8) as executor:  # Adjust max_workers as needed
+                list(tqdm(executor.map(lambda args: process_segment(*args), segment_args), total=len(segment_args), desc=f'  {match}', position=1, leave=False))
 
 def main():
     for split in SPLITS:
