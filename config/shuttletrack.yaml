@@ -12,10 +12,10 @@ model:
   use_frame_diff: true
   use_trajectory_inpainting: true
 training:
-  batch_size: 64
+  batch_size: 8
   epochs: 50
   learning_rate: 0.0005
-  num_workers: 12
+  num_workers: 10
   persistent_workers: true
   scheduler: cosine
   warmup_epochs: 5

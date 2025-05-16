@@ -13,6 +13,7 @@ from tqdm import tqdm
 from utils.dataset import ShuttleTrackDataset
 from models.shuttletrack import build_model_from_config
 from torch.utils.tensorboard import SummaryWriter
+import argparse
 
 # --- Utility functions ---
 def load_config(path):
@@ -82,7 +83,16 @@ def validate(model, loader, device):
 
 # --- Main training script ---
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--kaggle', action='store_true', help='Use Kaggle dataset paths')
+    args = parser.parse_args()
+
     config = load_config('config/shuttletrack.yaml')
+
+    if args.kaggle:
+        config['data']['processed_dataset_path'] = '/kaggle/input/shuttletrack-processed-data'
+        config['data']['raw_dataset_path'] = '/kaggle/input/shuttlecockframedataset'
+
     device = torch.device(config['device'] if torch.cuda.is_available() and config['device'] == 'cuda' else 'cpu')
     print(f'Using device: {device}')
 
