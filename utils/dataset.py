@@ -135,9 +135,6 @@ class ShuttleTrackDataset(Dataset):
         labels_tensor = torch.tensor(labels_for_sequence_np, dtype=torch.float32)
         label_load_end = time.time()
         t4 = time.time()
-        # Only print for first 100 calls
-        if idx < 100:
-            print(f"[__getitem__ idx={idx}] sample lookup: {t1-t0:.4f}s, image load: {image_load_time:.4f}s, resize: {resize_time:.4f}s, augmentation: {aug_time:.4f}s, label load: {label_load_end-label_load_start:.4f}s, total: {t4-t0:.4f}s")
         return {
             'frames': torch.stack(final_frames_tensors, dim=0),
             'diffs': torch.stack(final_diffs_tensors, dim=0),
