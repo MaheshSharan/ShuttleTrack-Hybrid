@@ -73,3 +73,5 @@ data/
 ShuttleCockFrameDataset/ 
 processed_data/
 processed_data.zip
+et --hard HEAD~2
+runs/shuttletrack/events.out.tfevents.1747504905.SeoYea-Ji.55200.0

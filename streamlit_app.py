@@ -8,6 +8,9 @@ import numpy as np
 from models.shuttletrack import build_model_from_config
 from utils.infer_utils import load_config, load_checkpoint, preprocess_frame
 import shutil
+from collections import deque
+# Import drawing functions from visualize.py
+from scripts.visualize import draw_fading_trajectory, draw_modern_shuttlecock
 
 st.set_page_config(page_title='ShuttleTrack Inference & Visualization', layout='wide')
 st.title('🏸 ShuttleTrack: Shuttlecock Detection & Trajectory Tracking')
@@ -75,20 +78,21 @@ if ckpt_file and video_file:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
             idx = 0
-            trajectory = []
+            # Use a buffer for fading trajectory (1 second or 20 frames if fps unknown)
+            buffer_len = int(fps) if fps > 0 else 20
+            trajectory = deque(maxlen=buffer_len)
             for _ in range(len(frames)):
                 ret, frame = cap.read()
                 if not ret or idx >= len(preds):
                     break
                 row = preds[idx]
-                print(f"Frame {idx}: visibility={row[0]:.3f}, x={row[1]:.3f}, y={row[2]:.3f}")
                 if row[0] > 0.5:
                     x = int(row[1] * width)
                     y = int(row[2] * height)
                     trajectory.append((x, y))
-                    cv2.circle(frame, (x, y), 8, (0, 0, 255), -1)
-                for i in range(1, len(trajectory)):
-                    cv2.line(frame, trajectory[i-1], trajectory[i], (0, 255, 0), 2)
+                    draw_modern_shuttlecock(frame, x, y)
+                # Draw only the fading trajectory
+                draw_fading_trajectory(frame, list(trajectory))
                 out.write(frame)
                 idx += 1
             cap.release()
