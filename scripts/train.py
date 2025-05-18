@@ -287,13 +287,15 @@ def main():
         
         # Training
         train_loss, train_bce, train_mse, train_smooth = train_one_epoch(model, train_loader, optimizer, device, config)
-        
+        print("Finished training epoch, starting validation...")
         # Validation
         val_loss, val_bce, val_mse, val_smooth = validate(model, valid_loader, device, config)
-        
+        print("Finished validation, starting evaluation on train set...")
         # Calculate and log additional metrics
         train_metrics = evaluate(model, train_loader, device)
+        print("Finished train evaluation, starting evaluation on valid set...")
         val_metrics = evaluate(model, valid_loader, device)
+        print("Finished all evaluations, proceeding to logging and checkpointing...")
         
         scheduler.step()
         
