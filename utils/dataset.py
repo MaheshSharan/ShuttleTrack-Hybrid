@@ -120,7 +120,7 @@ class ShuttleTrackDataset(Dataset):
         sample2 = self.__getitem__(idx, no_aug=True)
         frames2, diffs2 = sample2['frames'], sample2['diffs']
         vis2, heatmap2 = sample2['visibility'], sample2['heatmap']
-        _, H, W = frames.shape
+        T, C, H, W = frames.shape
         cx = np.random.randint(W)
         cy = np.random.randint(H)
         cut_w = np.random.randint(W // 4, W // 2)
@@ -129,8 +129,8 @@ class ShuttleTrackDataset(Dataset):
         x2 = np.clip(cx + cut_w // 2, 0, W)
         y1 = np.clip(cy - cut_h // 2, 0, H)
         y2 = np.clip(cy + cut_h // 2, 0, H)
-        frames[:, y1:y2, x1:x2] = frames2[:, y1:y2, x1:x2]
-        diffs[:, y1:y2, x1:x2] = diffs2[:, y1:y2, x1:x2]
+        frames[:, :, y1:y2, x1:x2] = frames2[:, :, y1:y2, x1:x2]
+        diffs[:, :, y1:y2, x1:x2] = diffs2[:, :, y1:y2, x1:x2]
         heatmap[:, y1:y2, x1:x2] = heatmap2[:, y1:y2, x1:x2]
         # For visibility, use lam
         vis = lam * vis + (1 - lam) * vis2
