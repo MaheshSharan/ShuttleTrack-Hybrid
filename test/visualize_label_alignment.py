@@ -34,7 +34,7 @@ def main():
         for b in range(B):
             for t in range(T):
                 img = frames[b, t].permute(1, 2, 0).cpu().numpy()  # (H, W, C)
-                img = (img * 255).astype(np.uint8)
+                img = (img * 255).astype(np.uint8).copy()
                 vis, x_norm, y_norm = labels[b, t].cpu().numpy()
                 x_px, y_px = denormalize_coords(x_norm, y_norm, W, H)
                 # Draw label
