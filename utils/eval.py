@@ -86,15 +86,13 @@ def compute_within_distance(pred_xy, true_xy, thresholds=[5, 10], img_size=224, 
 
 
 def evaluate(model, dataloader, device):
-    """
-    Evaluate model on a dataloader. Returns mean distance error, F1-score, precision, recall,
-    and percentage of predictions within specified pixel thresholds.
-    """
+    print("[EVAL] Starting evaluation...")
     model.eval()
     all_pred_xy, all_true_xy = [], []
     all_pred_vis, all_true_vis = [], []
     with torch.no_grad():
-        for batch in dataloader:
+        for i, batch in enumerate(dataloader):
+            print(f"[EVAL] Processing batch {i+1}/{len(dataloader)}")
             frames = batch['frames'].to(device)
             diffs = batch['diffs'].to(device)
             labels = batch['labels'].to(device)
@@ -111,6 +109,7 @@ def evaluate(model, dataloader, device):
             all_true_xy.append(true_xy)
             all_pred_vis.append(pred_vis)
             all_true_vis.append(true_vis)
+    print("[EVAL] Finished all batches, concatenating results and computing metrics...")
     all_pred_xy = np.concatenate(all_pred_xy, axis=0)
     all_true_xy = np.concatenate(all_true_xy, axis=0)
     all_pred_vis = np.concatenate(all_pred_vis, axis=0)
@@ -121,7 +120,7 @@ def evaluate(model, dataloader, device):
     f1 = compute_visibility_f1(all_pred_vis, all_true_vis)
     precision, recall = compute_precision_recall(all_pred_vis, all_true_vis)
     within_dist = compute_within_distance(all_pred_xy, all_true_xy, thresholds=[5, 10], visibility=all_true_vis)
-    
+    print("[EVAL] Metrics computed.")
     return {
         'distance_error': dist_err, 
         'visibility_f1': f1,

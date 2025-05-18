@@ -290,10 +290,7 @@ def main():
         print("Finished training epoch, starting validation...")
         # Validation
         val_loss, val_bce, val_mse, val_smooth = validate(model, valid_loader, device, config)
-        print("Finished validation, starting evaluation on train set...")
-        # Calculate and log additional metrics
-        train_metrics = evaluate(model, train_loader, device)
-        print("Finished train evaluation, starting evaluation on valid set...")
+        print("Finished validation, starting evaluation on valid set...")
         val_metrics = evaluate(model, valid_loader, device)
         print("Finished all evaluations, proceeding to logging and checkpointing...")
         
@@ -366,9 +363,6 @@ def main():
         writer.add_scalar('Loss/val_MSE', val_mse, epoch)
         writer.add_scalar('Loss/val_Smooth', val_smooth, epoch)
         
-        for key, value in train_metrics.items():
-            writer.add_scalar(f'Metrics/train_{key}', value, epoch)
-        
         for key, value in val_metrics.items():
             writer.add_scalar(f'Metrics/val_{key}', value, epoch)
         
@@ -382,12 +376,12 @@ def main():
             ["Total Loss", f"{train_loss:.4f}", f"{val_loss:.4f}", f"{best_metrics['val_loss']:.4f}"],
             ["BCE Loss", f"{train_bce:.4f}", f"{val_bce:.4f}", f"{best_metrics['val_bce']:.4f}"],
             ["MSE Loss", f"{train_mse:.4f}", f"{val_mse:.4f}", f"{best_metrics['val_mse']:.4f}"],
-            ["Distance Error", f"{train_metrics['distance_error']:.4f}", f"{val_metrics['distance_error']:.4f}", f"{best_metrics['val_distance_error']:.4f}"],
-            ["Visibility F1", f"{train_metrics['visibility_f1']:.4f}", f"{val_metrics['visibility_f1']:.4f}", f"{best_metrics['val_visibility_f1']:.4f}"],
-            ["Precision", f"{train_metrics['precision']:.4f}", f"{val_metrics['precision']:.4f}", f"{best_metrics['val_precision']:.4f}"],
-            ["Recall", f"{train_metrics['recall']:.4f}", f"{val_metrics['recall']:.4f}", f"{best_metrics['val_recall']:.4f}"],
-            ["Within 5px", f"{train_metrics['within_5px']*100:.1f}%", f"{val_metrics['within_5px']*100:.1f}%", f"{best_metrics['val_within_5px']*100:.1f}%"],
-            ["Within 10px", f"{train_metrics['within_10px']*100:.1f}%", f"{val_metrics['within_10px']*100:.1f}%", f"{best_metrics['val_within_10px']*100:.1f}%"]
+            ["Distance Error", "-", f"{val_metrics['distance_error']:.4f}", f"{best_metrics['val_distance_error']:.4f}"],
+            ["Visibility F1", "-", f"{val_metrics['visibility_f1']:.4f}", f"{best_metrics['val_visibility_f1']:.4f}"],
+            ["Precision", "-", f"{val_metrics['precision']:.4f}", f"{best_metrics['val_precision']:.4f}"],
+            ["Recall", "-", f"{val_metrics['recall']:.4f}", f"{best_metrics['val_recall']:.4f}"],
+            ["Within 5px", "-", f"{val_metrics['within_5px']*100:.1f}%", f"{best_metrics['val_within_5px']*100:.1f}%"],
+            ["Within 10px", "-", f"{val_metrics['within_10px']*100:.1f}%", f"{best_metrics['val_within_10px']*100:.1f}%"]
         ]
         
         # Print metrics table
