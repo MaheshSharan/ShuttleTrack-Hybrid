@@ -220,6 +220,9 @@ class ShuttleTrackDataset(Dataset):
         else:
             frames = torch.stack(final_frames_tensors, dim=0)
             diffs = torch.stack(final_diffs_tensors, dim=0)
+        # Ensure float32 for DataLoader compatibility
+        frames = frames.float()
+        diffs = diffs.float()
         return {
             'frames': frames,
             'diffs': diffs,
