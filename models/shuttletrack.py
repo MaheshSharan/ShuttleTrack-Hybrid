@@ -54,7 +54,7 @@ class HybridCNNTransformer(nn.Module):
         if input_channels != 3:
             if cnn_backbone.startswith('efficientnet'):
                 # For EfficientNet, replace the first Conv2d in the backbone
-                old_conv = self.cnn._conv_stem
+                old_conv = self.cnn.conv_stem
                 new_conv = nn.Conv2d(
                     input_channels, old_conv.out_channels,
                     kernel_size=old_conv.kernel_size,
@@ -66,7 +66,7 @@ class HybridCNNTransformer(nn.Module):
                     new_conv.weight[:, :3] = old_conv.weight
                     if input_channels > 3:
                         nn.init.kaiming_normal_(new_conv.weight[:, 3:])
-                self.cnn._conv_stem = new_conv
+                self.cnn.conv_stem = new_conv
             else:
                 # For ResNet models
                 old_conv = backbone.conv1
