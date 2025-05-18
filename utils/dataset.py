@@ -104,7 +104,7 @@ class ShuttleTrackDataset(Dataset):
         # Mixup with another random sample in the batch
         lam = np.random.beta(0.4, 0.4)
         idx = random.randint(0, len(self.samples) - 1)
-        sample2 = self.__getitem__(idx)
+        sample2 = self.__getitem__(idx, no_aug=True)
         frames2, diffs2 = sample2['frames'], sample2['diffs']
         vis2, heatmap2 = sample2['visibility'], sample2['heatmap']
         frames = lam * frames + (1 - lam) * frames2
@@ -117,7 +117,7 @@ class ShuttleTrackDataset(Dataset):
         # CutMix with another random sample in the batch
         lam = np.random.beta(1.0, 1.0)
         idx = random.randint(0, len(self.samples) - 1)
-        sample2 = self.__getitem__(idx)
+        sample2 = self.__getitem__(idx, no_aug=True)
         frames2, diffs2 = sample2['frames'], sample2['diffs']
         vis2, heatmap2 = sample2['visibility'], sample2['heatmap']
         _, H, W = frames.shape
@@ -136,7 +136,7 @@ class ShuttleTrackDataset(Dataset):
         vis = lam * vis + (1 - lam) * vis2
         return frames, diffs, vis, heatmap
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx, no_aug=False):
         t0 = time.time()
         sample = self.samples[idx]
         t1 = time.time()
@@ -203,7 +203,7 @@ class ShuttleTrackDataset(Dataset):
         label_load_end = time.time()
         t4 = time.time()
         # Apply advanced augmentations (only during training)
-        if self.augment:
+        if self.augment and not no_aug:
             if self.use_mixup and random.random() < 0.5:
                 frames, diffs, vis_tensor, heatmap_tensor = self._apply_mixup(
                     torch.stack(final_frames_tensors, dim=0),
