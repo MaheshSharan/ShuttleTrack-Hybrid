@@ -16,7 +16,7 @@ Design and implement a **novel AI system** for detecting and tracking shuttlecoc
 
 ---
 
-## 🏗️ Model Architecture
+## Model Architecture
 
 <img src="assets/architecture.svg" alt="ShuttleTrack Architecture" width="800"/>
 
@@ -74,8 +74,7 @@ python scripts/visualize_predictions.py
 
 ### 7. **Inference on New Videos**
 ```bash
-python scripts/infer.py --video path_to_video.mp4 --output predictions.csv --checkpoint checkpoint_best.pth
-python scripts/visualize.py --video path_to_video.mp4 --predictions predictions.csv --output output_with_trajectory.mp4
+python scripts/infer.py --video path/to/video.mp4 --visualize
 ```
 
 ### 8. **Interactive Streamlit App**
