@@ -13,6 +13,7 @@ model:
   type: hybrid
   use_frame_diff: true
   use_trajectory_inpainting: true
+  heatmap_size: 56
 training:
   batch_size: 32  # Increased for better GPU utilization (was 8)
   epochs: 50
@@ -27,3 +28,10 @@ training:
     bce: 1.0
     mse: 10.0
     smooth: 0.05
+  augmentations:
+    mixup: true
+    cutmix: true
+    random_erasing: true
+    color_jitter: true
+    blur: true
+    noise: true

@@ -127,30 +127,22 @@ def generate_human_insights(current_metrics, previous_metrics=None, best_metrics
 
 # --- Loss functions ---
 def compute_losses(pred, target, config):
-    # pred, target: (B, T, 3) [visibility, x, y]
-    vis_pred = pred[..., 0]
-    vis_true = target[..., 0]
-    xy_pred = pred[..., 1:]
-    xy_true = target[..., 1:]
+    # pred: dict with 'heatmap' (B, T, 1, H, W), 'visibility' (B, T)
+    # target: dict with 'heatmap' (B, T, H, W), 'visibility' (B, T)
+    pred_heatmap = pred['heatmap'].squeeze(2)  # (B, T, H, W)
+    true_heatmap = target['heatmap']  # (B, T, H, W)
+    pred_vis = pred['visibility']  # (B, T)
+    true_vis = target['visibility']  # (B, T)
     # Visibility loss (BCE)
-    bce = nn.BCEWithLogitsLoss()(vis_pred, vis_true)
-    # Localization loss (MSE)
-    mse = nn.MSELoss()(xy_pred, xy_true)
-    # Trajectory continuity loss (L2 on differences)
-    diff_pred = xy_pred[:, 1:, :] - xy_pred[:, :-1, :]
-    diff_true = xy_true[:, 1:, :] - xy_true[:, :-1, :]
-    smooth = nn.MSELoss()(diff_pred, diff_true)
-    
-    # Get loss weights from config
-    loss_weights = config.get('training', {}).get('loss_weights', {'bce': 1.0, 'mse': 1.0, 'smooth': 0.1})
+    bce = nn.BCEWithLogitsLoss()(pred_vis, true_vis)
+    # Heatmap loss (MSE)
+    mse = nn.MSELoss()(pred_heatmap, true_heatmap)
+    # Optionally, add smoothness loss on heatmap peaks (not implemented here)
+    loss_weights = config.get('training', {}).get('loss_weights', {'bce': 1.0, 'mse': 1.0})
     bce_weight = loss_weights.get('bce', 1.0)
     mse_weight = loss_weights.get('mse', 1.0)
-    smooth_weight = loss_weights.get('smooth', 0.1)
-    
-    # Calculate total loss
-    total_loss = bce_weight * bce + mse_weight * mse + smooth_weight * smooth
-    
-    return total_loss, bce, mse, smooth
+    total_loss = bce_weight * bce + mse_weight * mse
+    return total_loss, bce, mse, torch.tensor(0.0)
 
 # --- Training loop ---
 def train_one_epoch(model, loader, optimizer, device, config):
@@ -160,16 +152,16 @@ def train_one_epoch(model, loader, optimizer, device, config):
     for batch in tqdm(loader, desc='Train', leave=False):
         frames = batch['frames'].to(device)
         diffs = batch['diffs'].to(device)
-        labels = batch['labels'].to(device)
+        labels = {
+            'heatmap': batch['heatmap'].to(device),
+            'visibility': batch['visibility'].to(device)
+        }
         optimizer.zero_grad()
         pred = model(frames, diffs)
         loss, bce, mse, smooth = compute_losses(pred, labels, config)
         loss.backward()
-        
-        # Apply gradient clipping if enabled
         if 'gradient_clip_val' in config.get('training', {}):
             torch.nn.utils.clip_grad_norm_(model.parameters(), config['training']['gradient_clip_val'])
-            
         optimizer.step()
         total_loss += loss.item() * frames.size(0)
         total_bce += bce.item() * frames.size(0)
@@ -186,7 +178,10 @@ def validate(model, loader, device, config):
         for batch in tqdm(loader, desc='Valid', leave=False):
             frames = batch['frames'].to(device)
             diffs = batch['diffs'].to(device)
-            labels = batch['labels'].to(device)
+            labels = {
+                'heatmap': batch['heatmap'].to(device),
+                'visibility': batch['visibility'].to(device)
+            }
             pred = model(frames, diffs)
             loss, bce, mse, smooth = compute_losses(pred, labels, config)
             total_loss += loss.item() * frames.size(0)
@@ -221,8 +216,22 @@ def main():
     else:
         input_size_tuple = tuple(input_size_cfg)
 
-    train_set = ShuttleTrackDataset(config['data']['processed_dataset_path'], split='Train', sequence_length=config['model']['sequence_length'], augment=True, input_size=input_size_tuple)
-    valid_set = ShuttleTrackDataset(config['data']['processed_dataset_path'], split='valid', sequence_length=config['model']['sequence_length'], augment=False, input_size=input_size_tuple)
+    train_set = ShuttleTrackDataset(
+        config['data']['processed_dataset_path'],
+        split='Train',
+        sequence_length=config['model']['sequence_length'],
+        augment=True,
+        input_size=input_size_tuple,
+        augmentation_config=config['training'].get('augmentations', {})
+    )
+    valid_set = ShuttleTrackDataset(
+        config['data']['processed_dataset_path'],
+        split='valid',
+        sequence_length=config['model']['sequence_length'],
+        augment=False,
+        input_size=input_size_tuple,
+        augmentation_config=config['training'].get('augmentations', {})
+    )
     train_loader = DataLoader(train_set, batch_size=config['training']['batch_size'], shuffle=True, num_workers=config['training']['num_workers'], pin_memory=(device.type == 'cuda'))
     valid_loader = DataLoader(valid_set, batch_size=config['training']['batch_size'], shuffle=False, num_workers=config['training']['num_workers'], pin_memory=(device.type == 'cuda'))
 
