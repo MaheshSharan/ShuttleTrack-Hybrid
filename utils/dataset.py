@@ -27,14 +27,14 @@ class ShuttleTrackDataset(Dataset):
         self.cv_resize_dsize = (self.input_size[1], self.input_size[0])
 
         self.augmentation_config = augmentation_config or {}
-        self.transform = self._build_transform()
-        # Advanced aug flags
+        # Advanced aug flags (must be set before _build_transform)
         self.use_mixup = self.augmentation_config.get('mixup', False)
         self.use_cutmix = self.augmentation_config.get('cutmix', False)
         self.use_random_erasing = self.augmentation_config.get('random_erasing', False)
         self.use_color_jitter = self.augmentation_config.get('color_jitter', False)
         self.use_blur = self.augmentation_config.get('blur', False)
         self.use_noise = self.augmentation_config.get('noise', False)
+        self.transform = self._build_transform()
 
     def _gather_samples(self):
         samples = []
