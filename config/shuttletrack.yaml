@@ -25,5 +25,5 @@ training:
   gradient_clip_val: 1.0
   loss_weights:  # Loss weights for BCE, MSE, and smooth losses
     bce: 1.0
-    mse: 5.0
+    mse: 10.0
     smooth: 0.05
