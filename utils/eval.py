@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, precision_score, recall_score
 
 
 def compute_distance_error(pred_xy, true_xy, visibility=None):
@@ -37,9 +37,58 @@ def compute_visibility_f1(pred_vis, true_vis, threshold=0.5):
     return f1_score(true_vis.flatten(), pred_bin.flatten())
 
 
+def compute_precision_recall(pred_vis, true_vis, threshold=0.5):
+    """
+    Compute precision and recall for shuttlecock visibility detection.
+    Args:
+        pred_vis: (N, T) predicted logits or probabilities
+        true_vis: (N, T) ground truth (0 or 1)
+    Returns:
+        precision: float, recall: float
+    """
+    pred_bin = (pred_vis > threshold).astype(np.uint8)
+    precision = precision_score(true_vis.flatten(), pred_bin.flatten(), zero_division=0)
+    recall = recall_score(true_vis.flatten(), pred_bin.flatten(), zero_division=0)
+    return precision, recall
+
+
+def compute_within_distance(pred_xy, true_xy, thresholds=[5, 10], img_size=224, visibility=None):
+    """
+    Compute percentage of predictions within specified pixel thresholds.
+    Args:
+        pred_xy: (N, T, 2) predicted x, y (normalized 0-1)
+        true_xy: (N, T, 2) ground truth x, y (normalized 0-1)
+        thresholds: List of pixel thresholds to check
+        img_size: Size of the image (used to convert from normalized to pixels)
+        visibility: (N, T) binary mask (optional)
+    Returns:
+        dict: Percentage of predictions within each threshold
+    """
+    # Convert normalized coordinates to pixel distance
+    dist = np.linalg.norm(pred_xy - true_xy, axis=-1) * img_size  # (N, T) in pixels
+    
+    results = {}
+    for threshold in thresholds:
+        within = (dist <= threshold).astype(np.float32)  # (N, T)
+        
+        if visibility is not None:
+            # Only count visible points
+            within = within * visibility
+            total = np.sum(visibility)
+            if total == 0:
+                results[f'within_{threshold}px'] = 0.0
+            else:
+                results[f'within_{threshold}px'] = np.sum(within) / total
+        else:
+            results[f'within_{threshold}px'] = np.mean(within)
+    
+    return results
+
+
 def evaluate(model, dataloader, device):
     """
-    Evaluate model on a dataloader. Returns mean distance error and F1-score.
+    Evaluate model on a dataloader. Returns mean distance error, F1-score, precision, recall,
+    and percentage of predictions within specified pixel thresholds.
     """
     model.eval()
     all_pred_xy, all_true_xy = [], []
@@ -66,6 +115,17 @@ def evaluate(model, dataloader, device):
     all_true_xy = np.concatenate(all_true_xy, axis=0)
     all_pred_vis = np.concatenate(all_pred_vis, axis=0)
     all_true_vis = np.concatenate(all_true_vis, axis=0)
+    
+    # Calculate metrics
     dist_err = compute_distance_error(all_pred_xy, all_true_xy, visibility=all_true_vis)
     f1 = compute_visibility_f1(all_pred_vis, all_true_vis)
-    return {'distance_error': dist_err, 'visibility_f1': f1} 
+    precision, recall = compute_precision_recall(all_pred_vis, all_true_vis)
+    within_dist = compute_within_distance(all_pred_xy, all_true_xy, thresholds=[5, 10], visibility=all_true_vis)
+    
+    return {
+        'distance_error': dist_err, 
+        'visibility_f1': f1,
+        'precision': precision,
+        'recall': recall,
+        **within_dist  # Add within_5px and within_10px
+    } 

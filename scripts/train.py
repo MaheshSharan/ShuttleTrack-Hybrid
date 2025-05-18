@@ -14,6 +14,10 @@ from utils.dataset import ShuttleTrackDataset
 from models.shuttletrack import build_model_from_config
 from torch.utils.tensorboard import SummaryWriter
 import argparse
+from utils.eval import evaluate
+import time
+from tabulate import tabulate
+from datetime import timedelta
 
 # --- Utility functions ---
 def load_config(path):
@@ -81,6 +85,9 @@ def validate(model, loader, device):
     n = len(loader.dataset)
     return total_bce / n, total_mse / n, total_smooth / n
 
+def format_time(seconds):
+    return str(timedelta(seconds=int(seconds)))
+
 # --- Main training script ---
 def main():
     parser = argparse.ArgumentParser()
@@ -139,17 +146,70 @@ def main():
         best_val_loss = float('inf')
         print("[INFO] No checkpoint found. Starting training from scratch.")
 
+    # Initialize best metrics tracking
+    best_metrics = {
+        'val_loss': float('inf'),
+        'val_bce': float('inf'),
+        'val_mse': float('inf'), 
+        'val_distance_error': float('inf'),
+        'val_visibility_f1': 0,
+        'val_precision': 0,
+        'val_recall': 0,
+        'val_within_5px': 0,
+        'val_within_10px': 0,
+        'epoch': 0
+    }
+
+    # Record start time
+    training_start_time = time.time()
+
     # Training loop
     for epoch in range(start_epoch, config['training']['epochs'] + 1):
+        epoch_start_time = time.time()
         print(f'\nEpoch {epoch}/{config["training"]["epochs"]}')
+        
+        # Training
         train_bce, train_mse, train_smooth = train_one_epoch(model, train_loader, optimizer, device)
+        
+        # Validation
         val_bce, val_mse, val_smooth = validate(model, valid_loader, device)
-        scheduler.step()
+        
+        # Calculate and log additional metrics
+        train_metrics = evaluate(model, train_loader, device)
+        val_metrics = evaluate(model, valid_loader, device)
+        
         val_loss = val_bce + val_mse + 0.1 * val_smooth
-        print(f'Train BCE: {train_bce:.4f}, MSE: {train_mse:.4f}, Smooth: {train_smooth:.4f}')
-        print(f'Valid BCE: {val_bce:.4f}, MSE: {val_mse:.4f}, Smooth: {val_smooth:.4f}')
-
-        # TensorBoard logging
+        scheduler.step()
+        
+        # Update best metrics
+        is_best = False
+        if val_loss < best_metrics['val_loss']:
+            best_metrics['val_loss'] = val_loss
+            best_metrics['val_bce'] = val_bce
+            best_metrics['val_mse'] = val_mse
+            best_metrics['epoch'] = epoch
+            is_best = True
+        
+        for key, value in val_metrics.items():
+            val_key = f'val_{key}'
+            if val_key not in best_metrics:
+                best_metrics[val_key] = -float('inf') if 'f1' in key or 'within' in key or 'precision' in key or 'recall' in key else float('inf')
+            
+            # Update if better (higher is better for F1, precision, recall, within_X)
+            if ('f1' in key or 'within' in key or 'precision' in key or 'recall' in key):
+                if value > best_metrics[val_key]:
+                    best_metrics[val_key] = value
+                    is_best = True
+            # Lower is better for distance_error
+            elif value < best_metrics[val_key]:
+                best_metrics[val_key] = value
+                is_best = True
+        
+        # Epoch time calculation
+        epoch_time = time.time() - epoch_start_time
+        total_time = time.time() - training_start_time
+        
+        # Log to tensorboard
         writer.add_scalar('Loss/train_BCE', train_bce, epoch)
         writer.add_scalar('Loss/train_MSE', train_mse, epoch)
         writer.add_scalar('Loss/train_Smooth', train_smooth, epoch)
@@ -157,10 +217,36 @@ def main():
         writer.add_scalar('Loss/val_MSE', val_mse, epoch)
         writer.add_scalar('Loss/val_Smooth', val_smooth, epoch)
         writer.add_scalar('Loss/val_Total', val_loss, epoch)
-
+        
+        for key, value in train_metrics.items():
+            writer.add_scalar(f'Metrics/train_{key}', value, epoch)
+        
+        for key, value in val_metrics.items():
+            writer.add_scalar(f'Metrics/val_{key}', value, epoch)
+        
+        # Print initial loss info
+        print(f'Train BCE: {train_bce:.4f}, MSE: {train_mse:.4f}, Smooth: {train_smooth:.4f}')
+        print(f'Valid BCE: {val_bce:.4f}, MSE: {val_mse:.4f}, Smooth: {val_smooth:.4f}')
+        
+        # Generate metrics table
+        headers = ["Metric", "Train", "Valid", "Best"]
+        table_data = [
+            ["BCE Loss", f"{train_bce:.4f}", f"{val_bce:.4f}", f"{best_metrics['val_bce']:.4f}"],
+            ["MSE Loss", f"{train_mse:.4f}", f"{val_mse:.4f}", f"{best_metrics['val_mse']:.4f}"],
+            ["Distance Error", f"{train_metrics['distance_error']:.4f}", f"{val_metrics['distance_error']:.4f}", f"{best_metrics['val_distance_error']:.4f}"],
+            ["Visibility F1", f"{train_metrics['visibility_f1']:.4f}", f"{val_metrics['visibility_f1']:.4f}", f"{best_metrics['val_visibility_f1']:.4f}"],
+            ["Precision", f"{train_metrics['precision']:.4f}", f"{val_metrics['precision']:.4f}", f"{best_metrics['val_precision']:.4f}"],
+            ["Recall", f"{train_metrics['recall']:.4f}", f"{val_metrics['recall']:.4f}", f"{best_metrics['val_recall']:.4f}"],
+            ["Within 5px", f"{train_metrics['within_5px']*100:.1f}%", f"{val_metrics['within_5px']*100:.1f}%", f"{best_metrics['val_within_5px']*100:.1f}%"],
+            ["Within 10px", f"{train_metrics['within_10px']*100:.1f}%", f"{val_metrics['within_10px']*100:.1f}%", f"{best_metrics['val_within_10px']*100:.1f}%"]
+        ]
+        
+        # Print metrics table
+        print(f"\nEpoch {epoch} Summary | Time: {format_time(epoch_time)} | Total: {format_time(total_time)}")
+        print(tabulate(table_data, headers=headers, tablefmt="grid"))
+        
         # Save best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if is_best:
             save_checkpoint(model, optimizer, epoch, val_loss, f'checkpoints/checkpoint_best.pth')
             print('  [*] Saved new best model!')
 
