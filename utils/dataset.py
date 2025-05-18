@@ -8,7 +8,7 @@ from albumentations.pytorch import ToTensorV2
 import cv2
 import time
 import math
-from albumentations import RandomBrightnessContrast, Blur, GaussNoise, RandomResizedCrop, RandomGamma, RandomShadow, RandomFog, RandomRain, RandomSnow, RandomSunFlare, RandomBrightness, RandomContrast, RandomErasing
+from albumentations import RandomBrightnessContrast, Blur, GaussNoise, RandomResizedCrop, RandomGamma, RandomShadow, RandomFog, RandomRain, RandomSnow, RandomSunFlare, RandomBrightness, RandomContrast
 
 class ShuttleTrackDataset(Dataset):
     def __init__(self, root_dir, split='train', sequence_length=5, augment=True, input_size=224, augmentation_config=None):
