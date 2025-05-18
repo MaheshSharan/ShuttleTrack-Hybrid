@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import yaml
+import shutil
+from PIL import Image
 
 # Load config
 def load_config(path='config/shuttletrack.yaml'):
@@ -93,6 +95,48 @@ def process_segment(frames_dir, csv_file, out_frames_dir, out_diffs_dir, out_lab
     if sample_diff_stats:
         print(f"  [DEBUG] Sample diff image: {sample_diff_stats['path']} | min: {sample_diff_stats['min']:.4f}, max: {sample_diff_stats['max']:.4f}, mean: {sample_diff_stats['mean']:.4f}, std: {sample_diff_stats['std']:.4f}")
 
+def verify_processed_segment(out_frames_dir, out_diffs_dir, out_labels_file, frames_dir):
+    try:
+        # Check all output dirs exist
+        if not (os.path.exists(out_frames_dir) and os.path.exists(out_diffs_dir)):
+            print(f"[VERIFY] Missing output directories: {out_frames_dir} or {out_diffs_dir}")
+            return False
+        # Check all frames present
+        raw_frames = [f for f in os.listdir(frames_dir) if f.endswith(('.jpg', '.png'))]
+        out_frames = [f for f in os.listdir(out_frames_dir) if f.endswith(('.jpg', '.png'))]
+        out_diffs = [f for f in os.listdir(out_diffs_dir) if f.endswith(('.jpg', '.png'))]
+        if len(raw_frames) != len(out_frames) or len(out_frames) != len(out_diffs):
+            print(f"[VERIFY] Frame count mismatch: raw={len(raw_frames)}, frames={len(out_frames)}, diffs={len(out_diffs)}")
+            return False
+        # Check sample images are valid
+        for sample in out_diffs[:min(3, len(out_diffs))]:
+            sample_path = os.path.join(out_diffs_dir, sample)
+            if os.path.getsize(sample_path) < 100:
+                print(f"[VERIFY] Small/corrupt diff file: {sample_path}")
+                return False
+            try:
+                img = Image.open(sample_path)
+                img.verify()
+            except Exception as e:
+                print(f"[VERIFY] Corrupt image file {sample_path}: {e}")
+                return False
+        # Check labels.npy
+        if not os.path.exists(out_labels_file):
+            print(f"[VERIFY] Missing labels.npy: {out_labels_file}")
+            return False
+        try:
+            arr = np.load(out_labels_file)
+            if arr.shape[0] != len(raw_frames):
+                print(f"[VERIFY] labels.npy row count mismatch: {arr.shape[0]} vs {len(raw_frames)}")
+                return False
+        except Exception as e:
+            print(f"[VERIFY] Corrupt labels.npy: {e}")
+            return False
+        return True
+    except Exception as e:
+        print(f"[VERIFY] Error verifying segment: {e}")
+        return False
+
 def process_split(split):
     split_path = os.path.join(DATASET_ROOT, split)
     matches = [d for d in os.listdir(split_path) if d.startswith('match')]
@@ -101,18 +145,22 @@ def process_split(split):
     for match in tqdm(matches, desc=f'Processing {split}', position=0, leave=True):
         match_path = os.path.join(split_path, match)
         segments = os.listdir(os.path.join(match_path, 'frames'))
-        
         print(f"\n[INFO] Processing match: {match} ({len(segments)} segments)")
-        
-        # Process each segment sequentially to avoid memory issues
         for segment in tqdm(segments, desc=f'  Segments in {match}', position=1, leave=True):
             frames_dir = os.path.join(match_path, 'frames', segment)
             csv_file = os.path.join(match_path, 'csv', f'{segment}_ball.csv')
             out_frames_dir = os.path.join(OUTPUT_ROOT, split, match, segment, 'frames')
             out_diffs_dir = os.path.join(OUTPUT_ROOT, split, match, segment, 'diffs')
             out_labels_file = os.path.join(OUTPUT_ROOT, split, match, segment, 'labels.npy')
-            
-            # Process this segment
+            # Verification before processing
+            if os.path.exists(out_frames_dir) and os.path.exists(out_diffs_dir) and os.path.exists(out_labels_file):
+                print(f"[INFO] Found existing processed data for {segment}, verifying...")
+                if verify_processed_segment(out_frames_dir, out_diffs_dir, out_labels_file, frames_dir):
+                    print(f"[INFO] Verification successful, skipping {segment}")
+                    continue
+                else:
+                    print(f"[WARNING] Verification failed for {segment}, removing and reprocessing...")
+                    shutil.rmtree(os.path.join(OUTPUT_ROOT, split, match, segment), ignore_errors=True)
             ensure_dir(out_frames_dir)
             ensure_dir(out_diffs_dir)
             try:
@@ -120,7 +168,6 @@ def process_split(split):
             except Exception as e:
                 print(f"  [ERROR] Failed to process segment {segment}: {str(e)}")
                 continue
-        
         print(f"[INFO] Completed match: {match}\n")
 
 def main():
