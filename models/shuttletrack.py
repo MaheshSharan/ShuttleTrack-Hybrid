@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
+import timm
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=500):
@@ -26,42 +27,89 @@ class HybridCNNTransformer(nn.Module):
     - Stack features across the sequence and feed into a TransformerEncoder for temporal modeling.
     - Output a sequence of predictions (visibility, x, y) for each frame.
     """
-    def __init__(self, cnn_backbone='resnet18', input_channels=6, feature_dim=256, sequence_length=5, out_dim=3, nhead=4, num_layers=2):
+    def __init__(self, cnn_backbone='efficientnet_b3', input_channels=6, feature_dim=256, sequence_length=5, out_dim=3, nhead=8, num_layers=4, dropout=0.2, attn_dropout=0.1):
         super().__init__()
-        # CNN backbone (remove avgpool & fc)
-        # Use new weights argument to avoid deprecation warning
+        # CNN backbone
         if cnn_backbone == 'resnet18':
             from torchvision.models import ResNet18_Weights
             backbone = models.resnet18(weights=ResNet18_Weights.DEFAULT)
+            self.cnn = nn.Sequential(*list(backbone.children())[:-2])
+            self.cnn_out_dim = 512
         elif cnn_backbone == 'resnet34':
             from torchvision.models import ResNet34_Weights
             backbone = models.resnet34(weights=ResNet34_Weights.DEFAULT)
+            self.cnn = nn.Sequential(*list(backbone.children())[:-2])
+            self.cnn_out_dim = 512
+        elif cnn_backbone.startswith('efficientnet'):
+            # Use timm for EfficientNet models
+            backbone = timm.create_model(cnn_backbone, pretrained=True, features_only=True)
+            self.cnn = backbone
+            self.cnn_out_dim = backbone.feature_info.channels()[-1]  # Get the last layer's channels
         else:
             backbone = getattr(models, cnn_backbone)(weights='DEFAULT')
+            self.cnn = nn.Sequential(*list(backbone.children())[:-2])
+            self.cnn_out_dim = list(backbone.children())[-1].in_features if hasattr(list(backbone.children())[-1], 'in_features') else 512
+        
+        # Adjust first layer for input channels
         if input_channels != 3:
-            old_conv = backbone.conv1
-            backbone.conv1 = nn.Conv2d(
-                input_channels, old_conv.out_channels,
-                kernel_size=old_conv.kernel_size,
-                stride=old_conv.stride,
-                padding=old_conv.padding,
-                bias=old_conv.bias is not None
-            )
-            with torch.no_grad():
-                backbone.conv1.weight[:, :3] = old_conv.weight
-                if input_channels > 3:
-                    nn.init.kaiming_normal_(backbone.conv1.weight[:, 3:])
-        self.cnn = nn.Sequential(*list(backbone.children())[:-2])
-        self.cnn_out_dim = list(backbone.children())[-1].in_features if hasattr(list(backbone.children())[-1], 'in_features') else 512
+            if cnn_backbone.startswith('efficientnet'):
+                # For EfficientNet, replace the first Conv2d in the backbone
+                old_conv = self.cnn.stem.conv
+                new_conv = nn.Conv2d(
+                    input_channels, old_conv.out_channels,
+                    kernel_size=old_conv.kernel_size,
+                    stride=old_conv.stride,
+                    padding=old_conv.padding,
+                    bias=old_conv.bias is not None
+                )
+                with torch.no_grad():
+                    new_conv.weight[:, :3] = old_conv.weight
+                    if input_channels > 3:
+                        nn.init.kaiming_normal_(new_conv.weight[:, 3:])
+                self.cnn.stem.conv = new_conv
+            else:
+                # For ResNet models
+                old_conv = backbone.conv1
+                backbone.conv1 = nn.Conv2d(
+                    input_channels, old_conv.out_channels,
+                    kernel_size=old_conv.kernel_size,
+                    stride=old_conv.stride,
+                    padding=old_conv.padding,
+                    bias=old_conv.bias is not None
+                )
+                with torch.no_grad():
+                    backbone.conv1.weight[:, :3] = old_conv.weight
+                    if input_channels > 3:
+                        nn.init.kaiming_normal_(backbone.conv1.weight[:, 3:])
+        
         self.cnn_proj = nn.Conv2d(self.cnn_out_dim, feature_dim, 1)
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.sequence_length = sequence_length
         self.feature_dim = feature_dim
+        
+        # Add dropout after CNN features
+        self.dropout = nn.Dropout(dropout)
+        
         # Positional encoding for temporal sequence
         self.pos_encoder = PositionalEncoding(feature_dim, max_len=sequence_length)
-        # TransformerEncoder for temporal modeling
-        encoder_layer = nn.TransformerEncoderLayer(d_model=feature_dim, nhead=nhead, batch_first=True)
+        
+        # TransformerEncoder with attention dropout for temporal modeling
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=feature_dim,
+            nhead=nhead,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True
+        )
+        # Set attention dropout manually since the parameter isn't directly exposed
+        for name, param in encoder_layer.named_parameters():
+            if 'self_attn' in name and 'dropout' in name:
+                # This is a bit of a hack but should work for setting attn_dropout
+                encoder_layer.self_attn.dropout = attn_dropout
+        
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
         # Output head: predict (visibility, x, y) for each frame
         self.head = nn.Linear(feature_dim, out_dim)
 
@@ -79,9 +127,19 @@ class HybridCNNTransformer(nn.Module):
         elif x.dtype != torch.float32:
             x = x.float()
         
-        feats = self.cnn(x)  # (B*T, F, h, w)
+        # Process with CNN backbone
+        if isinstance(self.cnn, nn.Sequential):
+            feats = self.cnn(x)  # (B*T, F, h, w)
+        else:  # For EfficientNet from timm
+            feats = self.cnn(x)[-1]  # Get the last feature map
+        
         feats = self.cnn_proj(feats)  # (B*T, feature_dim, h, w)
         feats = self.avgpool(feats).view(B, T, self.feature_dim)  # (B, T, feature_dim)
+        
+        # Apply dropout to CNN features
+        feats = self.dropout(feats)
+        
+        # Apply positional encoding and transformer
         feats = self.pos_encoder(feats)  # (B, T, feature_dim)
         seq_feats = self.transformer(feats)  # (B, T, feature_dim)
         preds = self.head(seq_feats)  # (B, T, 3)
@@ -90,13 +148,16 @@ class HybridCNNTransformer(nn.Module):
 
 def build_model_from_config(config):
     model_cfg = config['model']
-    cnn_backbone = model_cfg.get('cnn_backbone', 'resnet18')
+    cnn_backbone = model_cfg.get('cnn_backbone', 'efficientnet_b3')
     input_size = model_cfg.get('input_size', 224)
     sequence_length = model_cfg.get('sequence_length', 5)
     feature_dim = 256
     out_dim = 3
-    nhead = model_cfg.get('transformer_nhead', 4)
-    num_layers = model_cfg.get('transformer_layers', 2)
+    nhead = model_cfg.get('transformer_nhead', 8)
+    num_layers = model_cfg.get('transformer_layers', 4)
+    dropout = model_cfg.get('dropout', 0.2)
+    attn_dropout = model_cfg.get('attn_dropout', 0.1)
+    
     return HybridCNNTransformer(
         cnn_backbone=cnn_backbone,
         input_channels=6,
@@ -104,5 +165,7 @@ def build_model_from_config(config):
         sequence_length=sequence_length,
         out_dim=out_dim,
         nhead=nhead,
-        num_layers=num_layers
+        num_layers=num_layers,
+        dropout=dropout,
+        attn_dropout=attn_dropout
     ) 

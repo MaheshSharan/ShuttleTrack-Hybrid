@@ -3,11 +3,13 @@ data:
   raw_dataset_path: ShuttleCockFrameDataset
 device: cuda
 model:
-  cnn_backbone: resnet18
+  cnn_backbone: efficientnet_b3
   input_size: 224
   sequence_length: 5
-  transformer_layers: 2
-  transformer_nhead: 4
+  transformer_layers: 4
+  transformer_nhead: 8
+  dropout: 0.2
+  attn_dropout: 0.1
   type: hybrid
   use_frame_diff: true
   use_trajectory_inpainting: true
@@ -20,3 +22,8 @@ training:
   scheduler: cosine
   warmup_epochs: 5
   weight_decay: 0.01
+  gradient_clip_val: 1.0
+  loss_weights:  # Loss weights for BCE, MSE, and smooth losses
+    bce: 1.0
+    mse: 5.0
+    smooth: 0.05

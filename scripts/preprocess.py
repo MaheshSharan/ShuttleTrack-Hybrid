@@ -31,31 +31,56 @@ def ensure_dir(path):
     if not os.path.exists(path):
         os.makedirs(path)
 
+def compute_median_image(frames_dir, frame_files):
+    print(f"  [INFO] Computing median image for {frames_dir} ...")
+    imgs = []
+    for frame_file in tqdm(frame_files, desc="    Loading frames for median", leave=False):
+        img = cv2.imread(os.path.join(frames_dir, frame_file))
+        if img is not None:
+            imgs.append(img.astype(np.float32))
+    if not imgs:
+        raise RuntimeError(f"No frames found in {frames_dir} for median computation.")
+    median_img = np.median(np.stack(imgs, axis=0), axis=0)
+    print(f"  [INFO] Median image computed for {frames_dir}.")
+    return median_img
+
 def process_segment(frames_dir, csv_file, out_frames_dir, out_diffs_dir, out_labels_file):
     frame_files = sorted(os.listdir(frames_dir))
     df = pd.read_csv(csv_file)
-    prev_img = None
     labels = []
+    ensure_dir(out_frames_dir)
+    ensure_dir(out_diffs_dir)
+    # Compute median image for this segment
+    median_img = compute_median_image(frames_dir, frame_files)
+    sample_diff_stats = None
     for i, frame_file in enumerate(frame_files):
         img = cv2.imread(os.path.join(frames_dir, frame_file))
         img = img.astype(np.float32) / 255.0
-        # Frame difference
-        if prev_img is not None:
-            diff = cv2.absdiff(img, prev_img)
-        else:
-            diff = np.zeros_like(img)
-        prev_img = img
+        # Median-subtracted diff
+        diff = np.abs(img - (median_img / 255.0))
         # Label
         row = df.iloc[i]
         original_h, original_w = img.shape[0], img.shape[1]
         label = [row['Visibility'], row['X'] / original_w, row['Y'] / original_h]
         labels.append(label)
         # Save processed frame and diff as images
-        ensure_dir(out_frames_dir)
-        ensure_dir(out_diffs_dir)
-        cv2.imwrite(os.path.join(out_frames_dir, frame_file), (img * 255).astype(np.uint8))
-        cv2.imwrite(os.path.join(out_diffs_dir, frame_file), (diff * 255).astype(np.uint8))
+        out_frame_path = os.path.join(out_frames_dir, frame_file)
+        out_diff_path = os.path.join(out_diffs_dir, frame_file)
+        cv2.imwrite(out_frame_path, (img * 255).astype(np.uint8))
+        cv2.imwrite(out_diff_path, (diff * 255).astype(np.uint8))
+        # Log stats for the first diff image
+        if i == 0:
+            sample_diff_stats = {
+                'path': out_diff_path,
+                'min': float(diff.min()),
+                'max': float(diff.max()),
+                'mean': float(diff.mean()),
+                'std': float(diff.std())
+            }
     np.save(out_labels_file, np.array(labels, dtype=np.float32))
+    print(f"  [INFO] Processed {len(frame_files)} frames in {frames_dir}.")
+    if sample_diff_stats:
+        print(f"  [DEBUG] Sample diff image: {sample_diff_stats['path']} | min: {sample_diff_stats['min']:.4f}, max: {sample_diff_stats['max']:.4f}, mean: {sample_diff_stats['mean']:.4f}, std: {sample_diff_stats['std']:.4f}")
 
 def process_split(split):
     split_path = os.path.join(DATASET_ROOT, split)
