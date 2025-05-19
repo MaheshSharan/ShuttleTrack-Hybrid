@@ -144,21 +144,40 @@ def compute_losses(pred, target, config):
     total_loss = bce_weight * bce + mse_weight * mse
     return total_loss, bce, mse, torch.tensor(0.0)
 
+def has_nan(tensor):
+    return torch.isnan(tensor).any().item()
+
 # --- Training loop ---
 def train_one_epoch(model, loader, optimizer, device, config):
     model.train()
     total_loss = 0
     total_bce, total_mse, total_smooth = 0, 0, 0
-    for batch in tqdm(loader, desc='Train', leave=False):
+    skipped_batches = 0
+    for batch_idx, batch in enumerate(tqdm(loader, desc='Train', leave=False)):
         frames = batch['frames'].to(device)
         diffs = batch['diffs'].to(device)
         labels = {
             'heatmap': batch['heatmap'].to(device),
             'visibility': batch['visibility'].to(device)
         }
+        # Check for NaNs in input
+        if has_nan(frames) or has_nan(diffs) or has_nan(labels['heatmap']) or has_nan(labels['visibility']):
+            print(f"[NaN WARNING][Train][Batch {batch_idx}] NaN detected in input. Skipping batch.")
+            skipped_batches += 1
+            continue
         optimizer.zero_grad()
         pred = model(frames, diffs)
+        # Check for NaNs in model output
+        if has_nan(pred['heatmap']) or has_nan(pred['visibility']):
+            print(f"[NaN WARNING][Train][Batch {batch_idx}] NaN detected in model output. Skipping batch.")
+            skipped_batches += 1
+            continue
         loss, bce, mse, smooth = compute_losses(pred, labels, config)
+        # Check for NaNs in loss
+        if (has_nan(loss) or has_nan(bce) or has_nan(mse) or has_nan(smooth)):
+            print(f"[NaN WARNING][Train][Batch {batch_idx}] NaN detected in loss. Skipping batch.")
+            skipped_batches += 1
+            continue
         loss.backward()
         if 'gradient_clip_val' in config.get('training', {}):
             torch.nn.utils.clip_grad_norm_(model.parameters(), config['training']['gradient_clip_val'])
@@ -168,27 +187,47 @@ def train_one_epoch(model, loader, optimizer, device, config):
         total_mse += mse.item() * frames.size(0)
         total_smooth += smooth.item() * frames.size(0)
     n = len(loader.dataset)
+    if skipped_batches > 0:
+        print(f"[NaN WARNING][Train] Skipped {skipped_batches} batches due to NaNs.")
     return total_loss / n, total_bce / n, total_mse / n, total_smooth / n
 
 def validate(model, loader, device, config):
     model.eval()
     total_loss = 0
     total_bce, total_mse, total_smooth = 0, 0, 0
+    skipped_batches = 0
     with torch.no_grad():
-        for batch in tqdm(loader, desc='Valid', leave=False):
+        for batch_idx, batch in enumerate(tqdm(loader, desc='Valid', leave=False)):
             frames = batch['frames'].to(device)
             diffs = batch['diffs'].to(device)
             labels = {
                 'heatmap': batch['heatmap'].to(device),
                 'visibility': batch['visibility'].to(device)
             }
+            # Check for NaNs in input
+            if has_nan(frames) or has_nan(diffs) or has_nan(labels['heatmap']) or has_nan(labels['visibility']):
+                print(f"[NaN WARNING][Valid][Batch {batch_idx}] NaN detected in input. Skipping batch.")
+                skipped_batches += 1
+                continue
             pred = model(frames, diffs)
+            # Check for NaNs in model output
+            if has_nan(pred['heatmap']) or has_nan(pred['visibility']):
+                print(f"[NaN WARNING][Valid][Batch {batch_idx}] NaN detected in model output. Skipping batch.")
+                skipped_batches += 1
+                continue
             loss, bce, mse, smooth = compute_losses(pred, labels, config)
+            # Check for NaNs in loss
+            if (has_nan(loss) or has_nan(bce) or has_nan(mse) or has_nan(smooth)):
+                print(f"[NaN WARNING][Valid][Batch {batch_idx}] NaN detected in loss. Skipping batch.")
+                skipped_batches += 1
+                continue
             total_loss += loss.item() * frames.size(0)
             total_bce += bce.item() * frames.size(0)
             total_mse += mse.item() * frames.size(0)
             total_smooth += smooth.item() * frames.size(0)
     n = len(loader.dataset)
+    if skipped_batches > 0:
+        print(f"[NaN WARNING][Valid] Skipped {skipped_batches} batches due to NaNs.")
     return total_loss / n, total_bce / n, total_mse / n, total_smooth / n
 
 def format_time(seconds):
