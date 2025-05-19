@@ -149,16 +149,61 @@ def train_one_epoch(model, loader, optimizer, device, config):
     model.train()
     total_loss = 0
     total_bce, total_mse, total_smooth = 0, 0, 0
-    for batch in tqdm(loader, desc='Train', leave=False):
+    for batch_idx, batch in enumerate(tqdm(loader, desc='Train', leave=False)):
         frames = batch['frames'].to(device)
         diffs = batch['diffs'].to(device)
         labels = {
             'heatmap': batch['heatmap'].to(device),
             'visibility': batch['visibility'].to(device)
         }
+        # === DEBUG PRINTS: Only for first batch ===
+        if batch_idx == 0:
+            print("=== DEBUG: Batch Data ===")
+            print("frames min/max:", frames.min().item(), frames.max().item())
+            print("diffs min/max:", diffs.min().item(), diffs.max().item())
+            print("heatmap min/max:", labels['heatmap'].min().item(), labels['heatmap'].max().item())
+            print("visibility min/max:", labels['visibility'].min().item(), labels['visibility'].max().item())
+            print("Any NaN in frames?", torch.isnan(frames).any().item())
+            print("Any NaN in diffs?", torch.isnan(diffs).any().item())
+            print("Any NaN in heatmap?", torch.isnan(labels['heatmap']).any().item())
+            print("Any NaN in visibility?", torch.isnan(labels['visibility']).any().item())
+            print("Any Inf in frames?", torch.isinf(frames).any().item())
+            print("Any Inf in diffs?", torch.isinf(diffs).any().item())
+            print("Any Inf in heatmap?", torch.isinf(labels['heatmap']).any().item())
+            print("Any Inf in visibility?", torch.isinf(labels['visibility']).any().item())
         optimizer.zero_grad()
         pred = model(frames, diffs)
+        if batch_idx == 0:
+            # Check model outputs
+            if isinstance(pred, dict):
+                for k, v in pred.items():
+                    print(f"Output '{k}' min/max:", v.min().item(), v.max().item())
+                    print(f"Any NaN in output '{k}'?", torch.isnan(v).any().item())
+                    print(f"Any Inf in output '{k}'?", torch.isinf(v).any().item())
+            else:
+                print("Output min/max:", pred.min().item(), pred.max().item())
+                print("Any NaN in output?", torch.isnan(pred).any().item())
+                print("Any Inf in output?", torch.isinf(pred).any().item())
         loss, bce, mse, smooth = compute_losses(pred, labels, config)
+        if batch_idx == 0:
+            print("BCE Loss:", bce.item())
+            print("MSE Loss:", mse.item())
+            print("Smooth Loss:", smooth.item())
+            print("Total Loss:", loss.item())
+            print("Any NaN in loss?", any([
+                torch.isnan(loss).item(),
+                torch.isnan(bce).item(),
+                torch.isnan(mse).item(),
+                torch.isnan(smooth).item()
+            ]))
+            print("Any Inf in loss?", any([
+                torch.isinf(loss).item(),
+                torch.isinf(bce).item(),
+                torch.isinf(mse).item(),
+                torch.isinf(smooth).item()
+            ]))
+            print("[DEBUG BREAK] Stopping after first batch for inspection.")
+            break
         loss.backward()
         if 'gradient_clip_val' in config.get('training', {}):
             torch.nn.utils.clip_grad_norm_(model.parameters(), config['training']['gradient_clip_val'])
