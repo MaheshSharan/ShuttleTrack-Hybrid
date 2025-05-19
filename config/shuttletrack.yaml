@@ -17,20 +17,22 @@ model:
 training:
   batch_size: 8  # Increased for better GPU utilization (was 8)
   epochs: 50
-  learning_rate: 0.0005
+  learning_rate: 0.0001  # Reduced learning rate to improve stability
   num_workers: 16  # Increased for faster data loading (was 10)
   persistent_workers: true
   scheduler: cosine
   warmup_epochs: 5
   weight_decay: 0.01
-  gradient_clip_val: 1.0
+  gradient_clip_val: 0.5  # Reduced to prevent exploding gradients
   loss_weights:  # Loss weights for BCE, MSE, and smooth losses
     bce: 1.0
-    mse: 10.0
+    mse: 5.0  # Reduced to decrease the impact of potential outliers
     smooth: 0.05
+  numerical_stability:
+    epsilon: 1e-6  # Small epsilon value for numerical stability in calculations
   augmentations:
-    mixup: true
-    cutmix: true
+    mixup: false  # Temporarily disabled to rule out augmentation-related issues
+    cutmix: false  # Temporarily disabled to rule out augmentation-related issues
     random_erasing: true
     color_jitter: true
     blur: true
