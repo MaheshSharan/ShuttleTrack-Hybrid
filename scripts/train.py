@@ -147,8 +147,11 @@ def compute_losses(pred, target, config):
 def has_nan(tensor):
     return torch.isnan(tensor).any().item()
 
+def print_tensor_stats(name, tensor):
+    print(f"  {name}: shape={tuple(tensor.shape)}, min={tensor.min().item():.4f}, max={tensor.max().item():.4f}, mean={tensor.mean().item():.4f}, std={tensor.std().item():.4f}, has_nan={torch.isnan(tensor).any().item()}")
+
 # --- Training loop ---
-def train_one_epoch(model, loader, optimizer, device, config):
+def train_one_epoch(model, loader, optimizer, device, config, debug=False):
     model.train()
     total_loss = 0
     total_bce, total_mse, total_smooth = 0, 0, 0
@@ -160,23 +163,46 @@ def train_one_epoch(model, loader, optimizer, device, config):
             'heatmap': batch['heatmap'].to(device),
             'visibility': batch['visibility'].to(device)
         }
+        if debug:
+            print(f"[DEBUG][Train][Batch {batch_idx}]")
+            print_tensor_stats('frames', frames)
+            print_tensor_stats('diffs', diffs)
+            print_tensor_stats('heatmap', labels['heatmap'])
+            print_tensor_stats('visibility', labels['visibility'])
         # Check for NaNs in input
         if has_nan(frames) or has_nan(diffs) or has_nan(labels['heatmap']) or has_nan(labels['visibility']):
             print(f"[NaN WARNING][Train][Batch {batch_idx}] NaN detected in input. Skipping batch.")
             skipped_batches += 1
+            if debug:
+                print("[DEBUG] Skipping batch due to NaN in input.")
+            if debug:
+                break
             continue
         optimizer.zero_grad()
         pred = model(frames, diffs)
+        if debug:
+            print_tensor_stats('pred_heatmap', pred['heatmap'])
+            print_tensor_stats('pred_visibility', pred['visibility'])
         # Check for NaNs in model output
         if has_nan(pred['heatmap']) or has_nan(pred['visibility']):
             print(f"[NaN WARNING][Train][Batch {batch_idx}] NaN detected in model output. Skipping batch.")
             skipped_batches += 1
+            if debug:
+                print("[DEBUG] Skipping batch due to NaN in model output.")
+            if debug:
+                break
             continue
         loss, bce, mse, smooth = compute_losses(pred, labels, config)
+        if debug:
+            print(f"  loss: {loss.item():.4f}, bce: {bce.item():.4f}, mse: {mse.item():.4f}, smooth: {smooth.item():.4f}")
         # Check for NaNs in loss
         if (has_nan(loss) or has_nan(bce) or has_nan(mse) or has_nan(smooth)):
             print(f"[NaN WARNING][Train][Batch {batch_idx}] NaN detected in loss. Skipping batch.")
             skipped_batches += 1
+            if debug:
+                print("[DEBUG] Skipping batch due to NaN in loss.")
+            if debug:
+                break
             continue
         loss.backward()
         if 'gradient_clip_val' in config.get('training', {}):
@@ -186,12 +212,15 @@ def train_one_epoch(model, loader, optimizer, device, config):
         total_bce += bce.item() * frames.size(0)
         total_mse += mse.item() * frames.size(0)
         total_smooth += smooth.item() * frames.size(0)
+        if debug:
+            print("[DEBUG] Completed 1 batch in debug mode. Exiting train_one_epoch.")
+            break
     n = len(loader.dataset)
     if skipped_batches > 0:
         print(f"[NaN WARNING][Train] Skipped {skipped_batches} batches due to NaNs.")
     return total_loss / n, total_bce / n, total_mse / n, total_smooth / n
 
-def validate(model, loader, device, config):
+def validate(model, loader, device, config, debug=False):
     model.eval()
     total_loss = 0
     total_bce, total_mse, total_smooth = 0, 0, 0
@@ -204,27 +233,53 @@ def validate(model, loader, device, config):
                 'heatmap': batch['heatmap'].to(device),
                 'visibility': batch['visibility'].to(device)
             }
+            if debug:
+                print(f"[DEBUG][Valid][Batch {batch_idx}]")
+                print_tensor_stats('frames', frames)
+                print_tensor_stats('diffs', diffs)
+                print_tensor_stats('heatmap', labels['heatmap'])
+                print_tensor_stats('visibility', labels['visibility'])
             # Check for NaNs in input
             if has_nan(frames) or has_nan(diffs) or has_nan(labels['heatmap']) or has_nan(labels['visibility']):
                 print(f"[NaN WARNING][Valid][Batch {batch_idx}] NaN detected in input. Skipping batch.")
                 skipped_batches += 1
+                if debug:
+                    print("[DEBUG] Skipping batch due to NaN in input.")
+                if debug:
+                    break
                 continue
             pred = model(frames, diffs)
+            if debug:
+                print_tensor_stats('pred_heatmap', pred['heatmap'])
+                print_tensor_stats('pred_visibility', pred['visibility'])
             # Check for NaNs in model output
             if has_nan(pred['heatmap']) or has_nan(pred['visibility']):
                 print(f"[NaN WARNING][Valid][Batch {batch_idx}] NaN detected in model output. Skipping batch.")
                 skipped_batches += 1
+                if debug:
+                    print("[DEBUG] Skipping batch due to NaN in model output.")
+                if debug:
+                    break
                 continue
             loss, bce, mse, smooth = compute_losses(pred, labels, config)
+            if debug:
+                print(f"  loss: {loss.item():.4f}, bce: {bce.item():.4f}, mse: {mse.item():.4f}, smooth: {smooth.item():.4f}")
             # Check for NaNs in loss
             if (has_nan(loss) or has_nan(bce) or has_nan(mse) or has_nan(smooth)):
                 print(f"[NaN WARNING][Valid][Batch {batch_idx}] NaN detected in loss. Skipping batch.")
                 skipped_batches += 1
+                if debug:
+                    print("[DEBUG] Skipping batch due to NaN in loss.")
+                if debug:
+                    break
                 continue
             total_loss += loss.item() * frames.size(0)
             total_bce += bce.item() * frames.size(0)
             total_mse += mse.item() * frames.size(0)
             total_smooth += smooth.item() * frames.size(0)
+            if debug:
+                print("[DEBUG] Completed 1 batch in debug mode. Exiting validate.")
+                break
     n = len(loader.dataset)
     if skipped_batches > 0:
         print(f"[NaN WARNING][Valid] Skipped {skipped_batches} batches due to NaNs.")
@@ -237,6 +292,7 @@ def format_time(seconds):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--kaggle', action='store_true', help='Use Kaggle dataset paths')
+    parser.add_argument('--debug', action='store_true', help='Run only 1 batch for train and valid, print details, and exit after 1 epoch')
     args = parser.parse_args()
 
     config = load_config('config/shuttletrack.yaml')
@@ -329,15 +385,15 @@ def main():
     training_start_time = time.time()
 
     # Training loop
-    for epoch in range(start_epoch, config['training']['epochs'] + 1):
+    for epoch in range(start_epoch, (start_epoch+1) if args.debug else (config['training']['epochs'] + 1)):
         epoch_start_time = time.time()
         print(f'\nEpoch {epoch}/{config["training"]["epochs"]}')
         
         # Training
-        train_loss, train_bce, train_mse, train_smooth = train_one_epoch(model, train_loader, optimizer, device, config)
+        train_loss, train_bce, train_mse, train_smooth = train_one_epoch(model, train_loader, optimizer, device, config, debug=args.debug)
         print("Finished training epoch, starting validation...")
         # Validation
-        val_loss, val_bce, val_mse, val_smooth = validate(model, valid_loader, device, config)
+        val_loss, val_bce, val_mse, val_smooth = validate(model, valid_loader, device, config, debug=args.debug)
         print("Finished validation, starting evaluation on valid set...")
         val_metrics = evaluate(model, valid_loader, device)
         print("Finished all evaluations, proceeding to logging and checkpointing...")
@@ -450,6 +506,10 @@ def main():
         # Save last model
         save_checkpoint(model, optimizer, epoch, val_loss, f'checkpoints/checkpoint_last.pth')
         print(f'  [*] Saved checkpoint for epoch {epoch}.')
+
+        if args.debug:
+            print("[DEBUG] Exiting after 1 epoch in debug mode.")
+            break
 
     writer.close()
 
