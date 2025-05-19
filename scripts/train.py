@@ -202,8 +202,7 @@ def train_one_epoch(model, loader, optimizer, device, config):
                 torch.isinf(mse).item(),
                 torch.isinf(smooth).item()
             ]))
-            print("[DEBUG BREAK] Stopping after first batch for inspection.")
-            break
+
         loss.backward()
         if 'gradient_clip_val' in config.get('training', {}):
             torch.nn.utils.clip_grad_norm_(model.parameters(), config['training']['gradient_clip_val'])
