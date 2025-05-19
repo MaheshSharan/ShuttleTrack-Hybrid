@@ -179,12 +179,16 @@ def save_batch_data(batch, pred, loss_dict, batch_idx, split='train'):
     debug_dir = os.path.join('debug_dumps', f"{split}_batch_{batch_idx}_{time.strftime('%Y%m%d_%H%M%S')}")
     os.makedirs(debug_dir, exist_ok=True)
     
+    # Prepare a report of which component had a NaN
+    # loss_dict contains boolean flags: True if NaN, False otherwise.
+    nan_source_report = {key: "Detected NaN" if value else "OK" for key, value in loss_dict.items()}
+    
     # Save metadata
     metadata = {
         'batch_idx': batch_idx,
         'split': split,
         'time': time.strftime('%Y-%m-%d %H:%M:%S'),
-        'loss_values': {k: float(v) if not torch.isnan(v).any() else "NaN" for k, v in loss_dict.items()},
+        'nan_source_component_status': nan_source_report,  # Changed from 'loss_values'
         'shapes': {
             'frames': tuple(batch['frames'].shape),
             'diffs': tuple(batch['diffs'].shape),
