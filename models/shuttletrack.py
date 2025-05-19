@@ -23,9 +23,11 @@ class PositionalEncoding(nn.Module):
 class HybridCNNTransformer(nn.Module):
     """
     Hybrid CNN + TransformerEncoder model for shuttlecock detection and trajectory tracking.
-    Now outputs a heatmap (1xHxW) for position and a separate visibility head.
+    - For each frame (RGB + diff), extract features with a CNN backbone.
+    - Stack features across the sequence and feed into a TransformerEncoder for temporal modeling.
+    - Output a sequence of predictions (visibility, x, y) for each frame.
     """
-    def __init__(self, cnn_backbone='efficientnet_b3', input_channels=6, feature_dim=256, sequence_length=5, heatmap_size=56, nhead=8, num_layers=4, dropout=0.2, attn_dropout=0.1):
+    def __init__(self, cnn_backbone='efficientnet_b3', input_channels=6, feature_dim=256, sequence_length=5, out_dim=3, nhead=8, num_layers=4, dropout=0.2, attn_dropout=0.1):
         super().__init__()
         # CNN backbone
         if cnn_backbone == 'resnet18':
@@ -84,9 +86,14 @@ class HybridCNNTransformer(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.sequence_length = sequence_length
         self.feature_dim = feature_dim
-        self.heatmap_size = heatmap_size
+        
+        # Add dropout after CNN features
         self.dropout = nn.Dropout(dropout)
+        
+        # Positional encoding for temporal sequence
         self.pos_encoder = PositionalEncoding(feature_dim, max_len=sequence_length)
+        
+        # TransformerEncoder with attention dropout for temporal modeling
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=feature_dim,
             nhead=nhead,
@@ -95,36 +102,48 @@ class HybridCNNTransformer(nn.Module):
             batch_first=True,
             norm_first=True
         )
+        # Set attention dropout manually since the parameter isn't directly exposed
         for name, param in encoder_layer.named_parameters():
             if 'self_attn' in name and 'dropout' in name:
+                # This is a bit of a hack but should work for setting attn_dropout
                 encoder_layer.self_attn.dropout = attn_dropout
+        
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        # Output heads
-        self.heatmap_head = nn.Linear(feature_dim, heatmap_size * heatmap_size)
-        self.visibility_head = nn.Linear(feature_dim, 1)
+        
+        # Output head: predict (visibility, x, y) for each frame
+        self.head = nn.Linear(feature_dim, out_dim)
 
     def forward(self, frames, diffs):
+        # frames, diffs: (B, T, C, H, W)
         B, T, C, H, W = frames.shape
-        x = torch.cat([frames, diffs], dim=2)
+        x = torch.cat([frames, diffs], dim=2)  # (B, T, 2*C, H, W)
+        
+        # Reshape x to (B*T, 2*C, H, W) for the CNN
         x = x.view(B * T, x.shape[2], H, W)
+
+        # Explicitly convert to FloatTensor and scale if it's uint8
         if x.dtype == torch.uint8:
             x = x.float() / 255.0
         elif x.dtype != torch.float32:
             x = x.float()
+        
+        # Process with CNN backbone
         if isinstance(self.cnn, nn.Sequential):
-            feats = self.cnn(x)
-        else:
-            feats = self.cnn(x)[-1]
-        feats = self.cnn_proj(feats)
-        feats = self.avgpool(feats).view(B, T, self.feature_dim)
+            feats = self.cnn(x)  # (B*T, F, h, w)
+        else:  # For EfficientNet from timm
+            feats = self.cnn(x)[-1]  # Get the last feature map
+        
+        feats = self.cnn_proj(feats)  # (B*T, feature_dim, h, w)
+        feats = self.avgpool(feats).view(B, T, self.feature_dim)  # (B, T, feature_dim)
+        
+        # Apply dropout to CNN features
         feats = self.dropout(feats)
-        feats = self.pos_encoder(feats)
-        seq_feats = self.transformer(feats)
-        # Output heads
-        heatmaps = self.heatmap_head(seq_feats)  # (B, T, H*W)
-        heatmaps = heatmaps.view(B, T, 1, self.heatmap_size, self.heatmap_size)  # (B, T, 1, H, W)
-        visibility = self.visibility_head(seq_feats).squeeze(-1)  # (B, T)
-        return {'heatmap': heatmaps, 'visibility': visibility}
+        
+        # Apply positional encoding and transformer
+        feats = self.pos_encoder(feats)  # (B, T, feature_dim)
+        seq_feats = self.transformer(feats)  # (B, T, feature_dim)
+        preds = self.head(seq_feats)  # (B, T, 3)
+        return preds
 
 
 def build_model_from_config(config):
@@ -133,7 +152,7 @@ def build_model_from_config(config):
     input_size = model_cfg.get('input_size', 224)
     sequence_length = model_cfg.get('sequence_length', 5)
     feature_dim = 256
-    heatmap_size = model_cfg.get('heatmap_size', 56)
+    out_dim = 3
     nhead = model_cfg.get('transformer_nhead', 8)
     num_layers = model_cfg.get('transformer_layers', 4)
     dropout = model_cfg.get('dropout', 0.2)
@@ -144,7 +163,7 @@ def build_model_from_config(config):
         input_channels=6,
         feature_dim=feature_dim,
         sequence_length=sequence_length,
-        heatmap_size=heatmap_size,
+        out_dim=out_dim,
         nhead=nhead,
         num_layers=num_layers,
         dropout=dropout,

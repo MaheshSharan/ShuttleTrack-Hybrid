@@ -18,10 +18,6 @@ from utils.eval import evaluate
 import time
 from tabulate import tabulate
 from datetime import timedelta
-import numpy as np
-import matplotlib.pyplot as plt
-from PIL import Image
-import json
 
 # --- Utility functions ---
 def load_config(path):
@@ -131,284 +127,73 @@ def generate_human_insights(current_metrics, previous_metrics=None, best_metrics
 
 # --- Loss functions ---
 def compute_losses(pred, target, config):
-    # pred: dict with 'heatmap' (B, T, 1, H, W), 'visibility' (B, T)
-    # target: dict with 'heatmap' (B, T, H, W), 'visibility' (B, T)
-    pred_heatmap = pred['heatmap'].squeeze(2)  # (B, T, H, W)
-    true_heatmap = target['heatmap']  # (B, T, H, W)
-    pred_vis = pred['visibility']  # (B, T)
-    true_vis = target['visibility']  # (B, T)
-    
-    # Get epsilon for numerical stability
-    epsilon = config.get('training', {}).get('numerical_stability', {}).get('epsilon', 1e-6)
-    
-    # Clamp predictions to prevent extreme values
-    pred_heatmap = torch.clamp(pred_heatmap, min=-100.0, max=100.0)
-    pred_vis = torch.clamp(pred_vis, min=-100.0, max=100.0)
-    
+    # pred, target: (B, T, 3) [visibility, x, y]
+    vis_pred = pred[..., 0]
+    vis_true = target[..., 0]
+    xy_pred = pred[..., 1:]
+    xy_true = target[..., 1:]
     # Visibility loss (BCE)
-    bce = nn.BCEWithLogitsLoss()(pred_vis, true_vis)
+    bce = nn.BCEWithLogitsLoss()(vis_pred, vis_true)
+    # Localization loss (MSE)
+    mse = nn.MSELoss()(xy_pred, xy_true)
+    # Trajectory continuity loss (L2 on differences)
+    diff_pred = xy_pred[:, 1:, :] - xy_pred[:, :-1, :]
+    diff_true = xy_true[:, 1:, :] - xy_true[:, :-1, :]
+    smooth = nn.MSELoss()(diff_pred, diff_true)
     
-    # Heatmap loss (MSE)
-    # Add epsilon to denominators for stability
-    mse = nn.MSELoss()(pred_heatmap, true_heatmap)
-    
-    # Check for NaNs in loss components
-    if torch.isnan(bce):
-        print(f"[WARNING] NaN detected in BCE loss! Using default value.")
-        bce = torch.tensor(1.0, device=bce.device)
-    
-    if torch.isnan(mse):
-        print(f"[WARNING] NaN detected in MSE loss! Using default value.")
-        mse = torch.tensor(1.0, device=mse.device)
-    
-    # Optionally, add smoothness loss on heatmap peaks (not implemented here)
-    loss_weights = config.get('training', {}).get('loss_weights', {'bce': 1.0, 'mse': 1.0})
+    # Get loss weights from config
+    loss_weights = config.get('training', {}).get('loss_weights', {'bce': 1.0, 'mse': 1.0, 'smooth': 0.1})
     bce_weight = loss_weights.get('bce', 1.0)
     mse_weight = loss_weights.get('mse', 1.0)
-    total_loss = bce_weight * bce + mse_weight * mse
-    return total_loss, bce, mse, torch.tensor(0.0, device=bce.device)
-
-def has_nan(tensor):
-    return torch.isnan(tensor).any().item()
-
-def print_tensor_stats(name, tensor):
-    print(f"  {name}: shape={tuple(tensor.shape)}, min={tensor.min().item():.4f}, max={tensor.max().item():.4f}, mean={tensor.mean().item():.4f}, std={tensor.std().item():.4f}, has_nan={torch.isnan(tensor).any().item()}")
-
-def save_batch_data(batch, pred, loss_dict, batch_idx, split='train'):
-    """Save batch data to disk when NaNs are detected."""
-    debug_dir = os.path.join('debug_dumps', f"{split}_batch_{batch_idx}_{time.strftime('%Y%m%d_%H%M%S')}")
-    os.makedirs(debug_dir, exist_ok=True)
+    smooth_weight = loss_weights.get('smooth', 0.1)
     
-    # Prepare a report of which component had a NaN
-    # loss_dict contains boolean flags: True if NaN, False otherwise.
-    nan_source_report = {key: "Detected NaN" if value else "OK" for key, value in loss_dict.items()}
+    # Calculate total loss
+    total_loss = bce_weight * bce + mse_weight * mse + smooth_weight * smooth
     
-    # Save metadata
-    metadata = {
-        'batch_idx': batch_idx,
-        'split': split,
-        'time': time.strftime('%Y-%m-%d %H:%M:%S'),
-        'nan_source_component_status': nan_source_report,  # Changed from 'loss_values'
-        'shapes': {
-            'frames': tuple(batch['frames'].shape),
-            'diffs': tuple(batch['diffs'].shape),
-            'heatmap': tuple(batch['heatmap'].shape),
-            'visibility': tuple(batch['visibility'].shape)
-        }
-    }
-    
-    if pred:
-        metadata['shapes'].update({
-            'pred_heatmap': tuple(pred['heatmap'].shape),
-            'pred_visibility': tuple(pred['visibility'].shape)
-        })
-    
-    with open(os.path.join(debug_dir, 'metadata.json'), 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    # Save tensors as numpy arrays
-    torch.save(batch, os.path.join(debug_dir, 'batch.pt'))
-    if pred:
-        torch.save(pred, os.path.join(debug_dir, 'predictions.pt'))
-    
-    # Save sample visualizations (first sequence in batch)
-    os.makedirs(os.path.join(debug_dir, 'visualizations'), exist_ok=True)
-    
-    # Visualize first sequence in batch
-    for t in range(min(5, batch['frames'].shape[1])):  # Up to 5 frames in sequence
-        # Save frame
-        frame = batch['frames'][0, t].cpu().numpy().transpose(1, 2, 0).astype(np.uint8)
-        plt.figure(figsize=(10, 8))
-        plt.subplot(2, 2, 1)
-        plt.imshow(frame)
-        plt.title(f"Frame {t}")
-        plt.axis('off')
-        
-        # Save diff
-        diff = batch['diffs'][0, t].cpu().numpy().transpose(1, 2, 0).astype(np.uint8)
-        plt.subplot(2, 2, 2)
-        plt.imshow(diff)
-        plt.title(f"Diff {t}")
-        plt.axis('off')
-        
-        # Save ground truth heatmap
-        gt_heatmap = batch['heatmap'][0, t].cpu().numpy()
-        plt.subplot(2, 2, 3)
-        plt.imshow(gt_heatmap, cmap='hot')
-        plt.title(f"GT Heatmap {t} (vis={batch['visibility'][0, t].item():.2f})")
-        plt.axis('off')
-        
-        # Save predicted heatmap if available
-        if pred:
-            pred_heatmap = pred['heatmap'][0, t, 0].cpu().numpy()
-            plt.subplot(2, 2, 4)
-            plt.imshow(pred_heatmap, cmap='hot')
-            plt.title(f"Pred Heatmap {t} (vis={torch.sigmoid(pred['visibility'][0, t]).item():.2f})")
-            plt.axis('off')
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(debug_dir, 'visualizations', f'frame_{t}.png'))
-        plt.close()
-    
-    print(f"[DEBUG] Saved problematic batch data to {debug_dir}")
+    return total_loss, bce, mse, smooth
 
 # --- Training loop ---
-def train_one_epoch(model, loader, optimizer, device, config, debug=False):
+def train_one_epoch(model, loader, optimizer, device, config):
     model.train()
     total_loss = 0
     total_bce, total_mse, total_smooth = 0, 0, 0
-    skipped_batches = 0
-    for batch_idx, batch in enumerate(tqdm(loader, desc='Train', leave=False)):
+    for batch in tqdm(loader, desc='Train', leave=False):
         frames = batch['frames'].to(device)
         diffs = batch['diffs'].to(device)
-        labels = {
-            'heatmap': batch['heatmap'].to(device),
-            'visibility': batch['visibility'].to(device)
-        }
-        if debug:
-            print(f"[DEBUG][Train][Batch {batch_idx}]")
-            print_tensor_stats('frames', frames)
-            print_tensor_stats('diffs', diffs)
-            print_tensor_stats('heatmap', labels['heatmap'])
-            print_tensor_stats('visibility', labels['visibility'])
-        # Check for NaNs in input
-        if has_nan(frames) or has_nan(diffs) or has_nan(labels['heatmap']) or has_nan(labels['visibility']):
-            print(f"[NaN WARNING][Train][Batch {batch_idx}] NaN detected in input. Skipping batch.")
-            # Save the problematic batch data
-            save_batch_data(batch, None, {'frames_nan': has_nan(frames), 'diffs_nan': has_nan(diffs), 
-                            'heatmap_nan': has_nan(labels['heatmap']), 'visibility_nan': has_nan(labels['visibility'])},
-                           batch_idx, split='train')
-            skipped_batches += 1
-            if debug:
-                print("[DEBUG] Skipping batch due to NaN in input.")
-            if debug:
-                break
-            continue
+        labels = batch['labels'].to(device)
         optimizer.zero_grad()
         pred = model(frames, diffs)
-        if debug:
-            print_tensor_stats('pred_heatmap', pred['heatmap'])
-            print_tensor_stats('pred_visibility', pred['visibility'])
-        # Check for NaNs in model output
-        if has_nan(pred['heatmap']) or has_nan(pred['visibility']):
-            print(f"[NaN WARNING][Train][Batch {batch_idx}] NaN detected in model output. Skipping batch.")
-            # Save the problematic batch and prediction data
-            save_batch_data(batch, pred, {'pred_heatmap_nan': has_nan(pred['heatmap']), 
-                            'pred_visibility_nan': has_nan(pred['visibility'])},
-                           batch_idx, split='train')
-            skipped_batches += 1
-            if debug:
-                print("[DEBUG] Skipping batch due to NaN in model output.")
-            if debug:
-                break
-            continue
         loss, bce, mse, smooth = compute_losses(pred, labels, config)
-        if debug:
-            print(f"  loss: {loss.item():.4f}, bce: {bce.item():.4f}, mse: {mse.item():.4f}, smooth: {smooth.item():.4f}")
-        # Check for NaNs in loss
-        if (has_nan(loss) or has_nan(bce) or has_nan(mse) or has_nan(smooth)):
-            print(f"[NaN WARNING][Train][Batch {batch_idx}] NaN detected in loss. Skipping batch.")
-            # Save the problematic batch, prediction, and loss data
-            save_batch_data(batch, pred, {'loss_nan': has_nan(loss), 'bce_nan': has_nan(bce), 
-                            'mse_nan': has_nan(mse), 'smooth_nan': has_nan(smooth)},
-                           batch_idx, split='train')
-            skipped_batches += 1
-            if debug:
-                print("[DEBUG] Skipping batch due to NaN in loss.")
-            if debug:
-                break
-            continue
         loss.backward()
+        
+        # Apply gradient clipping if enabled
         if 'gradient_clip_val' in config.get('training', {}):
             torch.nn.utils.clip_grad_norm_(model.parameters(), config['training']['gradient_clip_val'])
+            
         optimizer.step()
         total_loss += loss.item() * frames.size(0)
         total_bce += bce.item() * frames.size(0)
         total_mse += mse.item() * frames.size(0)
         total_smooth += smooth.item() * frames.size(0)
-        if debug:
-            print("[DEBUG] Completed 1 batch in debug mode. Exiting train_one_epoch.")
-            break
     n = len(loader.dataset)
-    if skipped_batches > 0:
-        print(f"[NaN WARNING][Train] Skipped {skipped_batches} batches due to NaNs.")
     return total_loss / n, total_bce / n, total_mse / n, total_smooth / n
 
-def validate(model, loader, device, config, debug=False):
+def validate(model, loader, device, config):
     model.eval()
     total_loss = 0
     total_bce, total_mse, total_smooth = 0, 0, 0
-    skipped_batches = 0
     with torch.no_grad():
-        for batch_idx, batch in enumerate(tqdm(loader, desc='Valid', leave=False)):
+        for batch in tqdm(loader, desc='Valid', leave=False):
             frames = batch['frames'].to(device)
             diffs = batch['diffs'].to(device)
-            labels = {
-                'heatmap': batch['heatmap'].to(device),
-                'visibility': batch['visibility'].to(device)
-            }
-            if debug:
-                print(f"[DEBUG][Valid][Batch {batch_idx}]")
-                print_tensor_stats('frames', frames)
-                print_tensor_stats('diffs', diffs)
-                print_tensor_stats('heatmap', labels['heatmap'])
-                print_tensor_stats('visibility', labels['visibility'])
-            # Check for NaNs in input
-            if has_nan(frames) or has_nan(diffs) or has_nan(labels['heatmap']) or has_nan(labels['visibility']):
-                print(f"[NaN WARNING][Valid][Batch {batch_idx}] NaN detected in input. Skipping batch.")
-                # Save the problematic batch data
-                save_batch_data(batch, None, {'frames_nan': has_nan(frames), 'diffs_nan': has_nan(diffs), 
-                               'heatmap_nan': has_nan(labels['heatmap']), 'visibility_nan': has_nan(labels['visibility'])},
-                              batch_idx, split='valid')
-                skipped_batches += 1
-                if debug:
-                    print("[DEBUG] Skipping batch due to NaN in input.")
-                if debug:
-                    break
-                continue
+            labels = batch['labels'].to(device)
             pred = model(frames, diffs)
-            if debug:
-                print_tensor_stats('pred_heatmap', pred['heatmap'])
-                print_tensor_stats('pred_visibility', pred['visibility'])
-            # Check for NaNs in model output
-            if has_nan(pred['heatmap']) or has_nan(pred['visibility']):
-                print(f"[NaN WARNING][Valid][Batch {batch_idx}] NaN detected in model output. Skipping batch.")
-                # Save the problematic batch and prediction data
-                save_batch_data(batch, pred, {'pred_heatmap_nan': has_nan(pred['heatmap']), 
-                               'pred_visibility_nan': has_nan(pred['visibility'])},
-                              batch_idx, split='valid')
-                skipped_batches += 1
-                if debug:
-                    print("[DEBUG] Skipping batch due to NaN in model output.")
-                if debug:
-                    break
-                continue
             loss, bce, mse, smooth = compute_losses(pred, labels, config)
-            if debug:
-                print(f"  loss: {loss.item():.4f}, bce: {bce.item():.4f}, mse: {mse.item():.4f}, smooth: {smooth.item():.4f}")
-            # Check for NaNs in loss
-            if (has_nan(loss) or has_nan(bce) or has_nan(mse) or has_nan(smooth)):
-                print(f"[NaN WARNING][Valid][Batch {batch_idx}] NaN detected in loss. Skipping batch.")
-                # Save the problematic batch, prediction, and loss data
-                save_batch_data(batch, pred, {'loss_nan': has_nan(loss), 'bce_nan': has_nan(bce), 
-                               'mse_nan': has_nan(mse), 'smooth_nan': has_nan(smooth)},
-                              batch_idx, split='valid')
-                skipped_batches += 1
-                if debug:
-                    print("[DEBUG] Skipping batch due to NaN in loss.")
-                if debug:
-                    break
-                continue
             total_loss += loss.item() * frames.size(0)
             total_bce += bce.item() * frames.size(0)
             total_mse += mse.item() * frames.size(0)
             total_smooth += smooth.item() * frames.size(0)
-            if debug:
-                print("[DEBUG] Completed 1 batch in debug mode. Exiting validate.")
-                break
     n = len(loader.dataset)
-    if skipped_batches > 0:
-        print(f"[NaN WARNING][Valid] Skipped {skipped_batches} batches due to NaNs.")
     return total_loss / n, total_bce / n, total_mse / n, total_smooth / n
 
 def format_time(seconds):
@@ -418,11 +203,7 @@ def format_time(seconds):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--kaggle', action='store_true', help='Use Kaggle dataset paths')
-    parser.add_argument('--debug', action='store_true', help='Run only 1 batch for train and valid, print details, and exit after 1 epoch')
     args = parser.parse_args()
-
-    # Create debug directories if they don't exist
-    os.makedirs('debug_dumps', exist_ok=True)
 
     config = load_config('config/shuttletrack.yaml')
 
@@ -440,22 +221,8 @@ def main():
     else:
         input_size_tuple = tuple(input_size_cfg)
 
-    train_set = ShuttleTrackDataset(
-        config['data']['processed_dataset_path'],
-        split='Train',
-        sequence_length=config['model']['sequence_length'],
-        augment=True,
-        input_size=input_size_tuple,
-        augmentation_config=config['training'].get('augmentations', {})
-    )
-    valid_set = ShuttleTrackDataset(
-        config['data']['processed_dataset_path'],
-        split='valid',
-        sequence_length=config['model']['sequence_length'],
-        augment=False,
-        input_size=input_size_tuple,
-        augmentation_config=config['training'].get('augmentations', {})
-    )
+    train_set = ShuttleTrackDataset(config['data']['processed_dataset_path'], split='Train', sequence_length=config['model']['sequence_length'], augment=True, input_size=input_size_tuple)
+    valid_set = ShuttleTrackDataset(config['data']['processed_dataset_path'], split='valid', sequence_length=config['model']['sequence_length'], augment=False, input_size=input_size_tuple)
     train_loader = DataLoader(train_set, batch_size=config['training']['batch_size'], shuffle=True, num_workers=config['training']['num_workers'], pin_memory=(device.type == 'cuda'))
     valid_loader = DataLoader(valid_set, batch_size=config['training']['batch_size'], shuffle=False, num_workers=config['training']['num_workers'], pin_memory=(device.type == 'cuda'))
 
@@ -514,15 +281,15 @@ def main():
     training_start_time = time.time()
 
     # Training loop
-    for epoch in range(start_epoch, (start_epoch+1) if args.debug else (config['training']['epochs'] + 1)):
+    for epoch in range(start_epoch, config['training']['epochs'] + 1):
         epoch_start_time = time.time()
         print(f'\nEpoch {epoch}/{config["training"]["epochs"]}')
         
         # Training
-        train_loss, train_bce, train_mse, train_smooth = train_one_epoch(model, train_loader, optimizer, device, config, debug=args.debug)
+        train_loss, train_bce, train_mse, train_smooth = train_one_epoch(model, train_loader, optimizer, device, config)
         print("Finished training epoch, starting validation...")
         # Validation
-        val_loss, val_bce, val_mse, val_smooth = validate(model, valid_loader, device, config, debug=args.debug)
+        val_loss, val_bce, val_mse, val_smooth = validate(model, valid_loader, device, config)
         print("Finished validation, starting evaluation on valid set...")
         val_metrics = evaluate(model, valid_loader, device)
         print("Finished all evaluations, proceeding to logging and checkpointing...")
@@ -635,10 +402,6 @@ def main():
         # Save last model
         save_checkpoint(model, optimizer, epoch, val_loss, f'checkpoints/checkpoint_last.pth')
         print(f'  [*] Saved checkpoint for epoch {epoch}.')
-
-        if args.debug:
-            print("[DEBUG] Exiting after 1 epoch in debug mode.")
-            break
 
     writer.close()
 
