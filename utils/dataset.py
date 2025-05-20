@@ -8,6 +8,7 @@ from albumentations.pytorch import ToTensorV2
 import cv2
 import time
 from scipy.ndimage import gaussian_filter
+import yaml
 
 class ShuttleTrackDataset(Dataset):
     def __init__(self, root_dir, split='train', sequence_length=5, augment=True, input_size=224, 
@@ -83,35 +84,30 @@ class ShuttleTrackDataset(Dataset):
         Returns:
             str: 'easy', 'medium', or 'hard'
         """
-        if self.split != 'Train' or not os.path.exists(sample['labels_path']):
+        if self.split != 'Train' or not os.path.exists(sample['metadata_path']):
             return 'medium'  # Default for validation/test
         
-        # Load labels to analyze
+        # Load metadata to analyze
         try:
-            all_labels = np.load(sample['labels_path'])
-            seq_labels = all_labels[sample['label_indices']]
+            with open(sample['metadata_path'], 'r') as f:
+                metadata = yaml.safe_load(f)
             
-            # Calculate metrics to determine difficulty
-            visibility = seq_labels[..., 0]
-            vis_percentage = np.mean(visibility)
+            # Extract metrics to determine difficulty
+            if 'visibility_rate' in metadata:
+                vis_percentage = metadata['visibility_rate']
+            else:
+                vis_percentage = 0.8  # Default if not available
+                
+            # Use other metadata if available, such as:
+            # - shuttlecock speed
+            # - occlusions
+            # - motion blur
             
-            # Check for occlusions (transitions from visible to invisible)
-            occlusions = np.sum(np.abs(np.diff(visibility)))
-            
-            # Calculate trajectory smoothness
-            xy_coords = seq_labels[..., 1:]
-            smooth_metric = 0
-            if visibility.sum() > 1:  # At least 2 visible points
-                vis_indices = np.where(visibility > 0)[0]
-                if len(vis_indices) >= 2:
-                    diffs = xy_coords[vis_indices[1:]] - xy_coords[vis_indices[:-1]]
-                    smooth_metric = np.mean(np.linalg.norm(diffs, axis=-1))
-            
-            # Determine difficulty
-            if vis_percentage > 0.9 and occlusions == 0 and smooth_metric < 0.05:
-                return 'easy'  # High visibility, no occlusions, smooth trajectory
-            elif vis_percentage < 0.7 or occlusions >= 2 or smooth_metric > 0.1:
-                return 'hard'  # Low visibility, multiple occlusions, erratic movement
+            # Simple heuristic based on visibility
+            if vis_percentage > 0.9:
+                return 'easy'
+            elif vis_percentage < 0.7:
+                return 'hard'
             else:
                 return 'medium'
         except:
@@ -133,32 +129,46 @@ class ShuttleTrackDataset(Dataset):
                 diffs_dir = os.path.join(seg_dir, 'diffs')
                 flows_dir = os.path.join(seg_dir, 'flows') if self.use_optical_flow else None
                 heatmaps_dir = os.path.join(seg_dir, 'heatmaps') if self.use_heatmaps else None
-                labels_path = os.path.join(seg_dir, 'labels.npy')
+                metadata_path = os.path.join(seg_dir, 'metadata.yaml')
+                stack_indices_path = os.path.join(seg_dir, 'stack_indices.npy')
 
                 # Check if all required directories exist
                 required_dirs = [frames_dir, diffs_dir]
                 if self.use_optical_flow:
                     required_dirs.append(flows_dir)
                 
-                # Check if all required directories exist and labels file exists
-                if not all(os.path.isdir(d) for d in required_dirs) or not os.path.isfile(labels_path):
+                # Check if all required directories and files exist
+                if not all(os.path.isdir(d) for d in required_dirs) or not os.path.isfile(stack_indices_path):
                     continue
                     
+                # Get frame files
                 frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(('.jpg', '.png', '.jpeg'))])
                 
                 if not frame_files:
                     continue
 
+                # Load stack indices to get mapping between frames and labels
+                if os.path.exists(stack_indices_path):
+                    stack_indices = np.load(stack_indices_path)
+                else:
+                    # If no stack indices, use frame indices directly
+                    stack_indices = np.arange(len(frame_files))
+
+                # Process sequences
                 for i in range(len(frame_files) - self.sequence_length + 1):
+                    seq_frame_files = frame_files[i:i+self.sequence_length]
+                    seq_indices = stack_indices[i:i+self.sequence_length] if len(stack_indices) >= i+self.sequence_length else np.arange(i, i+self.sequence_length)
+                    
                     sample = {
                         'frames_dir': frames_dir,
                         'diffs_dir': diffs_dir,
                         'flows_dir': flows_dir,
                         'heatmaps_dir': heatmaps_dir,
-                        'labels_path': labels_path,
+                        'metadata_path': metadata_path,
+                        'stack_indices_path': stack_indices_path,
                         'start_idx': i,
-                        'frame_files': frame_files[i:i+self.sequence_length],
-                        'label_indices': list(range(i, i+self.sequence_length)),
+                        'frame_files': seq_frame_files,
+                        'stack_indices': seq_indices,
                         'match': match,
                         'segment': segment
                     }
@@ -380,25 +390,87 @@ class ShuttleTrackDataset(Dataset):
             mixed_frames.append(mixed_frame)
             mixed_diffs.append(mixed_diff)
         
-        # Mix labels
-        labels1 = np.load(sample1['labels_path'])[sample1['label_indices']]
-        labels2 = np.load(sample2['labels_path'])[sample2['label_indices']]
+        # Extract labels from heatmaps for both samples
+        heatmaps1 = self._load_heatmaps(sample1)
+        heatmaps2 = self._load_heatmaps(sample2)
         
-        # Mix visibility (binary weighted combination)
-        vis1 = labels1[..., 0]
-        vis2 = labels2[..., 0]
-        mixed_vis = (vis1 > 0.5).astype(np.float32) * lam + (vis2 > 0.5).astype(np.float32) * (1-lam)
-        mixed_vis = (mixed_vis > 0.5).astype(np.float32)  # Threshold to binary
+        # Mix heatmaps
+        mixed_heatmaps = []
+        for i in range(self.sequence_length):
+            mixed_heatmap = heatmaps1[i] * lam + heatmaps2[i] * (1-lam)
+            mixed_heatmaps.append(mixed_heatmap)
         
-        # Mix coordinates (only where visible)
-        xy1 = labels1[..., 1:]
-        xy2 = labels2[..., 1:]
-        mixed_xy = xy1 * lam + xy2 * (1-lam)
-        
-        # Combine labels
-        mixed_labels = np.concatenate([mixed_vis[..., np.newaxis], mixed_xy], axis=-1)
+        # Create mixed labels from heatmaps
+        mixed_labels = self._create_labels_from_heatmaps(mixed_heatmaps)
         
         return mixed_frames, mixed_diffs, mixed_labels
+
+    def _load_heatmaps(self, sample):
+        """Load heatmaps for a sample.
+        
+        Args:
+            sample: Sample dictionary
+            
+        Returns:
+            List of heatmaps
+        """
+        heatmaps = []
+        
+        if sample['heatmaps_dir'] and os.path.isdir(sample['heatmaps_dir']):
+            for frame_file in sample['frame_files']:
+                heatmap_file = os.path.splitext(frame_file)[0] + '.npz'
+                heatmap_path = os.path.join(sample['heatmaps_dir'], heatmap_file)
+                
+                try:
+                    if os.path.exists(heatmap_path):
+                        heatmap = np.load(heatmap_path)['heatmap']
+                    else:
+                        # Default empty heatmap
+                        heatmap = np.zeros((64, 64), dtype=np.float32)
+                except:
+                    # Default empty heatmap
+                    heatmap = np.zeros((64, 64), dtype=np.float32)
+                    
+                heatmaps.append(heatmap)
+        else:
+            # If no heatmaps directory, create empty heatmaps
+            for _ in range(len(sample['frame_files'])):
+                heatmaps.append(np.zeros((64, 64), dtype=np.float32))
+        
+        return heatmaps
+        
+    def _create_labels_from_heatmaps(self, heatmaps):
+        """Create labels from heatmaps.
+        
+        Args:
+            heatmaps: List of heatmaps
+            
+        Returns:
+            Labels array of shape (T, 3) with [visibility, x, y]
+        """
+        T = len(heatmaps)
+        labels = np.zeros((T, 3), dtype=np.float32)
+        
+        for t, heatmap in enumerate(heatmaps):
+            # Check if the heatmap has any signal
+            if np.max(heatmap) > 0:
+                # Get visibility based on peak value
+                labels[t, 0] = min(1.0, np.max(heatmap) * 2.0)  # Scale up, but cap at 1.0
+                
+                # Get peak position
+                peak_idx = np.argmax(heatmap)
+                cy, cx = np.unravel_index(peak_idx, heatmap.shape)
+                
+                # Convert to normalized coordinates
+                labels[t, 1] = cx / heatmap.shape[1]  # x
+                labels[t, 2] = cy / heatmap.shape[0]  # y
+            else:
+                # No shuttlecock detected
+                labels[t, 0] = 0.0
+                labels[t, 1] = 0.5  # Default to center
+                labels[t, 2] = 0.5  # Default to center
+                
+        return labels
 
     def __len__(self):
         return len(self.samples)
@@ -535,13 +607,18 @@ class ShuttleTrackDataset(Dataset):
             final_frames_tensors.append(augmented['image'])
             final_diffs_tensors.append(augmented['diff_image'])
         
-        # Get labels
-        if mixed_sample:
-            labels_tensor = torch.tensor(mixed_labels, dtype=torch.float32)
+        # Get labels from heatmaps if mixed sample not used
+        if not mixed_sample:
+            # Load or create heatmaps if not already loaded
+            if not heatmaps_list and self.use_heatmaps:
+                heatmaps_list = self._load_heatmaps(sample)
+                
+            # Create labels from heatmaps
+            labels_np = self._create_labels_from_heatmaps(heatmaps_list)
+            labels_tensor = torch.tensor(labels_np, dtype=torch.float32)
         else:
-            all_labels_np = np.load(sample['labels_path'])
-            labels_for_sequence_np = all_labels_np[sample['label_indices']]
-            labels_tensor = torch.tensor(labels_for_sequence_np, dtype=torch.float32)
+            # Use the pre-mixed labels
+            labels_tensor = torch.tensor(mixed_labels, dtype=torch.float32)
         
         # Create the return dictionary
         result = {

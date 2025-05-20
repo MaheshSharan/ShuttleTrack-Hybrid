@@ -397,7 +397,8 @@ def main():
         input_size_tuple = tuple(input_size_cfg)
 
     # Set initial curriculum difficulty if enabled
-    initial_difficulty = 'easy' if args.curriculum else None
+    # Initially disabled for first run to ensure all samples are loaded
+    initial_difficulty = None  # 'easy' if args.curriculum else None
     max_curriculum_epochs = config['training'].get('curriculum_epochs', 20) if args.curriculum else 0
     
     # Enhanced dataset with data augmentation techniques
