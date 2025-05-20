@@ -676,7 +676,17 @@ def main():
         
         # Print metrics table
         print(f"\nEpoch {epoch} Summary | Time: {format_time(epoch_time)} | Total: {format_time(total_time)}")
-        print(tabulate(table_data, headers=headers, tablefmt="grid"))
+        metrics_table = tabulate(table_data, headers=headers, tablefmt="grid")
+        print(metrics_table)
+        
+        # Save metrics table to a text file
+        with open(f'checkpoints/epoch_metrics_log.txt', 'a') as f:
+            f.write(f"\nEpoch {epoch}/{num_epochs} Summary | Time: {format_time(epoch_time)} | Total: {format_time(total_time)}\n")
+            f.write(metrics_table)
+            f.write("\n\n📊 Training Insights:\n")
+            for insight in insights:
+                f.write(f"  {insight}\n")
+            f.write("\n" + "="*80 + "\n")
         
         # Print human-readable insights
         print("\n📊 Training Insights:")
