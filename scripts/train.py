@@ -342,7 +342,7 @@ def train_one_epoch(model, loader, optimizer, device, config, epoch=None, max_ep
         
         if batch_losses is not None and batch_indices is not None:
             batch_losses.append(loss.item())
-            batch_indices.append(batch['index'].item())
+            batch_indices.append(batch['index'].item() if torch.is_tensor(batch['index']) and batch['index'].numel() == 1 else batch['index'][0].item())
     n = len(loader.dataset)
     return total_loss / n, total_bce / n, total_mse / n, total_smooth / n
 

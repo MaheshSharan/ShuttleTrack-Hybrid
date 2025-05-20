@@ -552,43 +552,57 @@ class ShuttleTrackDataset(Dataset):
                 diffs_resized_list.append(diff_resized)
                 
                 # Load optical flow if enabled
-                if self.use_optical_flow and sample['flows_dir']:
+                if self.use_optical_flow and sample['flows_dir'] and os.path.isdir(sample['flows_dir']):
                     flow_filename = os.path.splitext(frame_filename)[0] + '.npz'
                     flow_path = os.path.join(sample['flows_dir'], flow_filename)
                     try:
-                        flow = np.load(flow_path)['flow']
-                        
-                        # Flow is stored as [H, W, 2] with downsampled size (e.g., 640x360)
-                        # Resize to match the input size
-                        flow_resized = np.zeros((self.input_size[0], self.input_size[1], 2), dtype=np.float32)
-                        for i in range(2):
-                            flow_resized[..., i] = cv2.resize(
-                                flow[..., i], 
-                                self.cv_resize_dsize, 
-                                interpolation=cv2.INTER_LINEAR
-                            )
+                        if os.path.exists(flow_path):
+                            flow = np.load(flow_path)['flow']
                             
-                            # Scale flow values to account for resizing
-                            flow_resized[..., i] *= (self.input_size[1] / flow.shape[1] if i == 0 else 
-                                                  self.input_size[0] / flow.shape[0])
-                        
-                        flows_list.append(flow_resized)
+                            # Flow is stored as [H, W, 2] with downsampled size (e.g., 640x360)
+                            # Resize to match the input size
+                            flow_resized = np.zeros((self.input_size[0], self.input_size[1], 2), dtype=np.float32)
+                            for i in range(2):
+                                flow_resized[..., i] = cv2.resize(
+                                    flow[..., i], 
+                                    self.cv_resize_dsize, 
+                                    interpolation=cv2.INTER_LINEAR
+                                )
+                                
+                                # Scale flow values to account for resizing
+                                flow_resized[..., i] *= (self.input_size[1] / flow.shape[1] if i == 0 else 
+                                                     self.input_size[0] / flow.shape[0])
+                            
+                            flows_list.append(flow_resized)
+                        else:
+                            # Zero flow if file doesn't exist
+                            flows_list.append(np.zeros((self.input_size[0], self.input_size[1], 2), dtype=np.float32))
                     except Exception as e:
                         # If flow loading fails, use zero flow
                         print(f"Warning: Could not load flow for {flow_path}: {e}")
                         flows_list.append(np.zeros((self.input_size[0], self.input_size[1], 2), dtype=np.float32))
+                elif self.use_optical_flow:
+                    # Add zero flow if flows_dir doesn't exist but optical flow is enabled
+                    flows_list.append(np.zeros((self.input_size[0], self.input_size[1], 2), dtype=np.float32))
                 
                 # Load heatmaps if enabled
-                if self.use_heatmaps and sample['heatmaps_dir']:
+                if self.use_heatmaps and sample['heatmaps_dir'] and os.path.isdir(sample['heatmaps_dir']):
                     heatmap_filename = os.path.splitext(frame_filename)[0] + '.npz'
                     heatmap_path = os.path.join(sample['heatmaps_dir'], heatmap_filename)
                     try:
-                        heatmap = np.load(heatmap_path)['heatmap']
-                        heatmaps_list.append(heatmap)
+                        if os.path.exists(heatmap_path):
+                            heatmap = np.load(heatmap_path)['heatmap']
+                            heatmaps_list.append(heatmap)
+                        else:
+                            # Zero heatmap if file doesn't exist
+                            heatmaps_list.append(np.zeros((64, 64), dtype=np.float32))
                     except Exception as e:
                         print(f"Warning: Could not load heatmap for {heatmap_path}: {e}")
                         # For missing heatmaps, add zero heatmap
                         heatmaps_list.append(np.zeros((64, 64), dtype=np.float32))  # Default 64x64 size
+                elif self.use_heatmaps:
+                    # Add zero heatmap if heatmaps_dir doesn't exist but heatmaps are enabled
+                    heatmaps_list.append(np.zeros((64, 64), dtype=np.float32))
         
         # Apply random frame dropout for data augmentation
         if self.augment and random.random() < 0.2:
@@ -625,19 +639,29 @@ class ShuttleTrackDataset(Dataset):
             'frames': torch.stack(final_frames_tensors, dim=0),
             'diffs': torch.stack(final_diffs_tensors, dim=0),
             'labels': labels_tensor,
-            'idx': idx  # Include sample index for hard mining
+            'index': idx  # Include sample index for hard mining
         }
         
-        # Add optical flow if enabled
-        if self.use_optical_flow and flows_list:
-            # Convert flow arrays to tensors
-            flow_tensors = [torch.from_numpy(flow).permute(2, 0, 1) for flow in flows_list]
-            result['flows'] = torch.stack(flow_tensors, dim=0)
+        # Add optical flow if enabled and available
+        if self.use_optical_flow:
+            if len(flows_list) > 0:
+                # Convert flow arrays to tensors
+                flow_tensors = [torch.from_numpy(flow).permute(2, 0, 1) for flow in flows_list]
+                result['flows'] = torch.stack(flow_tensors, dim=0)
+            else:
+                # Create empty flows tensor if no flows available
+                dummy_flow = torch.zeros(self.sequence_length, 2, self.input_size[0], self.input_size[1])
+                result['flows'] = dummy_flow
         
         # Add heatmaps if enabled
-        if self.use_heatmaps and heatmaps_list:
-            # Convert heatmap arrays to tensors
-            heatmap_tensors = [torch.from_numpy(heatmap) for heatmap in heatmaps_list]
-            result['heatmaps'] = torch.stack(heatmap_tensors, dim=0)
+        if self.use_heatmaps:
+            if len(heatmaps_list) > 0:
+                # Convert heatmap arrays to tensors
+                heatmap_tensors = [torch.from_numpy(heatmap) for heatmap in heatmaps_list]
+                result['heatmaps'] = torch.stack(heatmap_tensors, dim=0)
+            else:
+                # Create empty heatmaps tensor if no heatmaps available
+                dummy_heatmaps = torch.zeros(self.sequence_length, 64, 64)
+                result['heatmaps'] = dummy_heatmaps
             
         return result 
