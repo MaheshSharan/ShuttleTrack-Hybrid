@@ -18,7 +18,7 @@ training:
   batch_size: 4
   learning_rate: 0.0001
   weight_decay: 0.0001
-  epochs: 10
+  epochs: 30
   num_workers: 2
   gradient_clip_val: 1.0
   pin_memory: true
@@ -26,12 +26,12 @@ training:
   # Loss function weights
   loss_weights:
     bce: 1.0
-    focal_bce: 1.5
+    focal_bce: 1.0
     mse: 1.0
-    focal: 0.8
-    smooth: 0.15
-    smooth_l1: 0.5
-    uncertainty: 0.2
+    focal: 5.0
+    smooth: 0.2
+    smooth_l1: 1.0
+    uncertainty: 0.3
   
   # Focal loss parameters
   focal_gamma: 2.0
