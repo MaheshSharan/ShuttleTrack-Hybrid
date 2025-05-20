@@ -257,7 +257,7 @@ class HybridCNNTransformer(nn.Module):
         
     def _extract_multi_scale_features(self, x):
         # Process with CNN backbone to get multi-scale features
-        if isinstance(self.feature_extractor, timm.models.efficientnet.EfficientNet):
+        if hasattr(self.feature_extractor, 'features_only') or str(self.feature_extractor.__class__).find('EfficientNet') >= 0:
             # For EfficientNet from timm, features_only=True already returns all feature maps
             features_list = self.feature_extractor(x)
         else:
