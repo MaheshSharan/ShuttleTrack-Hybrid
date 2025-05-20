@@ -1,28 +1,34 @@
 import torch
 import os
 import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cv2
 import numpy as np
 from tqdm import tqdm
 import pandas as pd
 import argparse
 from utils.infer_utils import load_config, load_checkpoint, process_video_for_inference
-from models.shuttletrack import build_model_from_config
+from models.shuttletrack import build_model_from_config, extract_coordinates_from_heatmap
+from utils.post_processing import create_trajectory_processor
 
-def run_inference(model, frames, diffs, device, seq_len):
+def run_inference(model, frames, diffs, flows=None, device=None, seq_len=5):
     """Run inference on frames and diffs using sliding window approach
     
     Args:
         model: ShuttleTrack model
         frames: Processed frames array (N, H, W, C)
         diffs: Median-subtracted diffs array (N, H, W, C)  
+        flows: Optional optical flow array (N, H, W, 2)
         device: Device to run inference on
         seq_len: Sequence length for model input
         
     Returns:
-        predictions: Array of predictions (N, 3)
+        Dictionary with visibility, coordinates, and heatmaps
     """
-    all_preds = []
+    visibility_preds = []
+    coords_preds = []
+    heatmap_preds = []
+    
     with torch.no_grad():
         # Run inference on sliding windows
         for i in tqdm(range(len(frames) - seq_len + 1), desc="Running inference"):
@@ -30,22 +36,48 @@ def run_inference(model, frames, diffs, device, seq_len):
             frame_seq = torch.tensor(frames[i:i+seq_len]).permute(0, 3, 1, 2).unsqueeze(0).to(device)  # (1, T, C, H, W)
             diff_seq = torch.tensor(diffs[i:i+seq_len]).permute(0, 3, 1, 2).unsqueeze(0).to(device)
             
-            # Get predictions
-            pred = model(frame_seq, diff_seq).cpu().numpy()[0]  # (T, 3)
+            # Handle optical flow if available
+            flow_seq = None
+            if flows is not None:
+                flow_seq = torch.tensor(flows[i:i+seq_len]).permute(0, 3, 1, 2).unsqueeze(0).to(device)
             
-            # Store predictions
+            # Get predictions
+            pred_dict = model(frame_seq, diff_seq, flow_seq)
+            
+            # Extract visibility and convert to probability
+            vis_probs = torch.sigmoid(pred_dict['visibility']).cpu().numpy()[0]  # (T,)
+            
+            # Extract coordinates from heatmap
+            coords, _ = extract_coordinates_from_heatmap(pred_dict['heatmap'])
+            coords = coords.cpu().numpy()[0]  # (T, 2)
+            
+            # Store heatmaps for later visualization
+            heatmaps = pred_dict['heatmap'].cpu().numpy()[0]  # (T, H, W)
+            
+            # Store predictions for each frame in the sequence
             for t in range(seq_len):
-                if i + t >= len(all_preds):
-                    all_preds.append(pred[t])
+                if i + t >= len(visibility_preds):
+                    visibility_preds.append(vis_probs[t])
+                    coords_preds.append(coords[t])
+                    heatmap_preds.append(heatmaps[t])
     
-    # Handle any remaining frames at the end with last sequence
-    if len(frames) > len(all_preds):
-        remaining = len(frames) - len(all_preds)
-        last_pred = all_preds[-1] if all_preds else np.zeros(3)
+    # Handle any remaining frames at the end with last valid prediction
+    if len(frames) > len(visibility_preds):
+        remaining = len(frames) - len(visibility_preds)
+        last_vis = visibility_preds[-1] if visibility_preds else 0
+        last_coord = coords_preds[-1] if coords_preds else np.zeros(2)
+        last_heatmap = heatmap_preds[-1] if heatmap_preds else np.zeros_like(heatmaps[0])
+        
         for _ in range(remaining):
-            all_preds.append(last_pred)
+            visibility_preds.append(last_vis)
+            coords_preds.append(last_coord)
+            heatmap_preds.append(last_heatmap)
     
-    return np.array(all_preds)
+    return {
+        'visibility': np.array(visibility_preds),  # (N,)
+        'coordinates': np.array(coords_preds),     # (N, 2)
+        'heatmaps': np.array(heatmap_preds)        # (N, H, W)
+    }
 
 def main():
     # Parse arguments
@@ -54,6 +86,14 @@ def main():
     parser.add_argument('--output', type=str, default='predictions.csv', help='Path to output predictions CSV')
     parser.add_argument('--checkpoint', type=str, default='checkpoints/checkpoint_best.pth', help='Path to model checkpoint')
     parser.add_argument('--visualize', action='store_true', help='Visualize predictions with trajectory overlay')
+    # Post-processing arguments
+    parser.add_argument('--post-process', action='store_true', help='Apply post-processing')
+    parser.add_argument('--smoothing', type=str, default='kalman', choices=['kalman', 'savgol', 'moving_avg'],
+                       help='Trajectory smoothing method')
+    parser.add_argument('--window-size', type=int, default=5, help='Window size for smoothing')
+    parser.add_argument('--inpaint-method', type=str, default='spline', choices=['linear', 'spline', 'pchip'],
+                       help='Trajectory inpainting method')
+    parser.add_argument('--vis-threshold', type=float, default=0.5, help='Visibility threshold')
     args = parser.parse_args()
 
     # Load config and model
@@ -78,13 +118,42 @@ def main():
     
     # Run inference
     print(f"Running inference with sequence length {seq_len}")
-    predictions = run_inference(model, frames, diffs, device, seq_len)
+    predictions = run_inference(model, frames, diffs, None, device, seq_len)
     
-    # Convert sigmoid output to probability for visibility
-    predictions[:, 0] = 1 / (1 + np.exp(-predictions[:, 0]))
+    # Apply post-processing if requested
+    if args.post_process:
+        print(f"Applying post-processing: {args.smoothing} smoothing with window size {args.window_size}")
+        
+        # Update config with command line arguments
+        post_config = {
+            'post_processing': {
+                'smooth_mode': args.smoothing,
+                'smooth_window_size': args.window_size,
+                'inpaint_method': args.inpaint_method,
+                'visibility_threshold': args.vis_threshold,
+                'visibility_smooth_window': 3
+            }
+        }
+        
+        # Create trajectory processor
+        processor = create_trajectory_processor({**config, **post_config})
+        
+        # Apply post-processing
+        coords = predictions['coordinates'].reshape(1, -1, 2)  # Add batch dimension
+        vis = predictions['visibility'].reshape(1, -1)         # Add batch dimension
+        
+        processed_coords, processed_vis = processor.process_predictions(coords, vis)
+        
+        # Update predictions
+        predictions['coordinates'] = processed_coords[0]  # Remove batch dimension
+        predictions['visibility'] = processed_vis[0]      # Remove batch dimension
     
     # Save predictions to CSV
-    df = pd.DataFrame(predictions, columns=['visibility', 'x', 'y'])
+    df = pd.DataFrame({
+        'visibility': predictions['visibility'],
+        'x': predictions['coordinates'][:, 0],
+        'y': predictions['coordinates'][:, 1]
+    })
     df.to_csv(args.output, index=False)
     print(f'Saved predictions to {args.output}')
     
@@ -124,10 +193,16 @@ def main():
             # Draw trajectory
             draw_fading_trajectory(frame, list(trajectory))
             
-            # Add prediction confidence
+            # Add prediction confidence and post-processing info
             confidence_text = f"Confidence: {row[1]['visibility']:.2f}"
             cv2.putText(frame, confidence_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
                         1, (0, 255, 255), 2, cv2.LINE_AA)
+            
+            # Add post-processing info if used
+            if args.post_process:
+                pp_text = f"Post-processing: {args.smoothing}"
+                cv2.putText(frame, pp_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX,
+                           0.7, (0, 255, 255), 2, cv2.LINE_AA)
             
             out.write(frame)
             

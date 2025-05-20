@@ -3,6 +3,7 @@ import torch
 import cv2
 import numpy as np
 from collections import deque
+from utils.post_processing import create_trajectory_processor
 
 def load_config(path):
     with open(path, 'r') as f:
@@ -24,7 +25,10 @@ def load_checkpoint(model, path, device):
 def preprocess_frame(frame, size=224):
     """Preprocess a single frame for inference (RGB conversion and resize)"""
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    frame = cv2.resize(frame, (size, size))
+    if isinstance(size, tuple):
+        frame = cv2.resize(frame, (size[1], size[0]))  # cv2.resize takes (width, height)
+    else:
+        frame = cv2.resize(frame, (size, size))
     frame = frame.astype(float) / 255.0
     return frame
 
@@ -73,16 +77,40 @@ def create_median_subtracted_diff(frame, median_bg):
     
     return diff
 
-def process_video_for_inference(video_path, input_size=224):
+def compute_optical_flow(prev_frame, curr_frame):
+    """Compute optical flow between two frames using Farneback method.
+    
+    Args:
+        prev_frame: Previous frame (H, W, C)
+        curr_frame: Current frame (H, W, C)
+        
+    Returns:
+        flow: Optical flow map (H, W, 2)
+    """
+    # Convert to grayscale
+    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_RGB2GRAY)
+    curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_RGB2GRAY)
+    
+    # Calculate flow
+    flow = cv2.calcOpticalFlowFarneback(
+        prev_gray, curr_gray, 
+        None, 0.5, 3, 15, 3, 5, 1.2, 0
+    )
+    
+    return flow
+
+def process_video_for_inference(video_path, input_size=224, compute_flow=False):
     """Process a video for inference, returning frames and median-subtracted diffs
     
     Args:
         video_path: Path to video file
         input_size: Size to resize frames to
+        compute_flow: Whether to compute optical flow
         
     Returns:
         frames: Processed frames
         diffs: Median-subtracted diffs
+        flows: Optional optical flow maps (if compute_flow=True)
     """
     # Read video frames
     cap = cv2.VideoCapture(video_path)
@@ -103,4 +131,60 @@ def process_video_for_inference(video_path, input_size=224):
     # Create median-subtracted diffs
     diffs = [create_median_subtracted_diff(frame, median_bg) for frame in processed_frames]
     
-    return np.stack(processed_frames), np.stack(diffs) 
+    # Compute optical flow if requested
+    if compute_flow:
+        flows = [np.zeros((processed_frames[0].shape[0], processed_frames[0].shape[1], 2), dtype=np.float32)]
+        for i in range(1, len(processed_frames)):
+            flow = compute_optical_flow(
+                (processed_frames[i-1] * 255).astype(np.uint8),
+                (processed_frames[i] * 255).astype(np.uint8)
+            )
+            flows.append(flow)
+        return np.stack(processed_frames), np.stack(diffs), np.stack(flows)
+    
+    return np.stack(processed_frames), np.stack(diffs)
+
+def apply_post_processing(predictions, config):
+    """Apply post-processing to model predictions.
+    
+    Args:
+        predictions: Dictionary with keys 'visibility' and 'coordinates'
+        config: Dictionary with post-processing configuration
+        
+    Returns:
+        Processed predictions
+    """
+    # Create trajectory processor
+    processor = create_trajectory_processor(config)
+    
+    # Reshape to add batch dimension
+    coords = predictions['coordinates'].reshape(1, -1, 2)
+    vis = predictions['visibility'].reshape(1, -1)
+    
+    # Apply post-processing
+    processed_coords, processed_vis = processor.process_predictions(coords, vis)
+    
+    # Update predictions and return
+    result = predictions.copy()
+    result['coordinates'] = processed_coords[0]  # Remove batch dimension
+    result['visibility'] = processed_vis[0]      # Remove batch dimension
+    
+    return result
+
+def save_predictions_to_csv(predictions, output_path):
+    """Save predictions to CSV file.
+    
+    Args:
+        predictions: Dictionary with keys 'visibility' and 'coordinates'
+        output_path: Path to save CSV file
+    """
+    import pandas as pd
+    
+    df = pd.DataFrame({
+        'visibility': predictions['visibility'],
+        'x': predictions['coordinates'][:, 0],
+        'y': predictions['coordinates'][:, 1]
+    })
+    
+    df.to_csv(output_path, index=False)
+    return df 

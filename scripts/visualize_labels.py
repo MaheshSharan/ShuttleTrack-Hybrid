@@ -10,6 +10,7 @@ SPLITS = ['Train', 'valid']
 N_SAMPLES = 20
 RESULTS_DIR = 'results/visualized_labels'
 HEATMAP_ALPHA = 0.4  # Transparency for heatmap overlay
+MATCHES_TO_PROCESS = ['match1', 'match2', 'match3']
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
@@ -19,7 +20,7 @@ for split in SPLITS:
     split_dir = os.path.join(PROCESSED_ROOT, split)
     if not os.path.exists(split_dir):
         continue
-    matches = [d for d in os.listdir(split_dir) if d.startswith('match')]
+    matches = [d for d in os.listdir(split_dir) if d in MATCHES_TO_PROCESS]
     for match in matches:
         match_dir = os.path.join(split_dir, match)
         segments = os.listdir(match_dir)
