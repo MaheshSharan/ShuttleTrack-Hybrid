@@ -199,7 +199,7 @@ def compute_losses(pred_dict, target, config, epoch=None, max_epochs=None):
                     for x in range(max(0, cx - radius), min(heatmap_size, cx + radius + 1)):
                         if (x, y) != (cx, cy):
                             dist_squared = (x - cx)**2 + (y - cy)**2
-                            weight = torch.exp(-dist_squared / (2 * sigma**2))
+                            weight = torch.exp(torch.tensor(-dist_squared / (2 * sigma**2), device=target_heatmaps.device))
                             target_heatmaps[b, t, y, x] = weight
     
     # Normalize each heatmap
