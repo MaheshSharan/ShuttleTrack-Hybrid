@@ -125,9 +125,12 @@ def process_segment(frames_dir, csv_file, out_dir, heatmap_size=64, stack_len=5,
         
         # Compute and save heatmap
         row = df.iloc[i]
-        x_norm = row['X'] / img.shape[1]
-        y_norm = row['Y'] / img.shape[0]
-        heatmap = generate_heatmap(x_norm, y_norm, heatmap_size, heatmap_size, sigma=2)
+        if 'Visibility' in row and row['Visibility'] == 0:
+            heatmap = np.zeros((heatmap_size, heatmap_size), dtype=np.float32)
+        else:
+            x_norm = row['X'] / img.shape[1]
+            y_norm = row['Y'] / img.shape[0]
+            heatmap = generate_heatmap(x_norm, y_norm, heatmap_size, heatmap_size, sigma=2)
         heatmap_filename = os.path.splitext(frame_file)[0] + '.npz'
         np.savez_compressed(os.path.join(heatmap_dir, heatmap_filename), heatmap=heatmap.astype(np.float32))
         
