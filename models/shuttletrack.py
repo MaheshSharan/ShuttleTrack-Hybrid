@@ -233,33 +233,53 @@ class HybridCNNTransformer(nn.Module):
             )
         self.heatmap_decoder_module = HeatmapDecoder(feature_dim, heatmap_size=heatmap_size)
 
-# In models/shuttletrack.py, within the HybridCNNTransformer class
+# In models/shuttletrack.py, within HybridCNNTransformer class
 
-    def _extract_multi_scale_features(self, x_input_cnn): # x_input_cnn is (B*T, C_in, H, W)
-        raw_features_list = None # This will hold the list of tensors from the CNN backbone
+    def _extract_multi_scale_features(self, x_input_cnn):
+        raw_features_list = None
 
-        # --- Debugging Info about expected adaptors ---
-        num_adaptors_expected = len(self.multi_scale_fusion.adaptors)
-        print(f"[DEBUG EXTRACT PRE-CHECK] Number of adaptors in multi_scale_fusion: {num_adaptors_expected}")
-        for i, adaptor in enumerate(self.multi_scale_fusion.adaptors):
-            print(f"[DEBUG EXTRACT PRE-CHECK] Adaptor {i} expects in_channels: {adaptor.in_channels}")
-        # --- End Debugging Info ---
+        # +++ ADD THESE DEBUG PRINTS FOR is_timm_features_model +++
+        print(f"[DEBUG EXTRACT CONDITION CHECK] Backbone class: {self.feature_extractor_cnn.__class__.__name__}")
+        has_feature_info = hasattr(self.feature_extractor_cnn, 'feature_info')
+        print(f"[DEBUG EXTRACT CONDITION CHECK] hasattr(self.feature_extractor_cnn, 'feature_info'): {has_feature_info}")
+        
+        has_features_only_attr = hasattr(self.feature_extractor_cnn, 'features_only')
+        print(f"[DEBUG EXTRACT CONDITION CHECK] hasattr(self.feature_extractor_cnn, 'features_only'): {has_features_only_attr}")
+        
+        features_only_value = None
+        if has_features_only_attr:
+            features_only_value = self.feature_extractor_cnn.features_only
+            print(f"[DEBUG EXTRACT CONDITION CHECK] self.feature_extractor_cnn.features_only value: {features_only_value}")
+        
+        is_timm_features_model_calculated = has_feature_info and (features_only_value if has_features_only_attr else False)
+        print(f"[DEBUG EXTRACT CONDITION CHECK] Calculated 'is_timm_features_model': {is_timm_features_model_calculated}")
+        # +++ END OF ADDED DEBUG PRINTS +++
 
         is_timm_features_model = hasattr(self.feature_extractor_cnn, 'feature_info') and \
                                  (self.feature_extractor_cnn.features_only if hasattr(self.feature_extractor_cnn, 'features_only') else False)
+        # This line above is what you currently have, we're just printing its components.
 
-        if is_timm_features_model:
-            print(f"[DEBUG EXTRACT] Attempting feature extraction with timm model: {self.feature_extractor_cnn.__class__.__name__}")
+        # --- Debugging Info about expected adaptors (keep this from before) ---
+        num_adaptors_expected = len(self.multi_scale_fusion.adaptors)
+        # print(f"[DEBUG EXTRACT PRE-CHECK] Number of adaptors in multi_scale_fusion: {num_adaptors_expected}")
+        # for i, adaptor in enumerate(self.multi_scale_fusion.adaptors):
+        #     print(f"[DEBUG EXTRACT PRE-CHECK] Adaptor {i} expects in_channels: {adaptor.in_channels}")
+        # --- End Debugging Info ---
+
+
+        if is_timm_features_model: # This should now match is_timm_features_model_calculated
+            print(f"[DEBUG EXTRACT] Path taken: 'is_timm_features_model' was True. Attempting feature extraction with timm model: {self.feature_extractor_cnn.__class__.__name__}")
             potential_features_from_backbone = self.feature_extractor_cnn(x_input_cnn) 
 
-            # +++ DETAILED INSPECTION OF TIMM OUTPUT +++
             print(f"[DEBUG EXTRACT TIMM OUTPUT] Type of 'potential_features_from_backbone': {type(potential_features_from_backbone)}")
+            # ... (rest of the detailed TIMM OUTPUT prints from the previous version of this function I sent) ...
+            # (Make sure the detailed prints for list/tuple/tensor type and shapes are still here)
             if isinstance(potential_features_from_backbone, (list, tuple)):
                 print(f"[DEBUG EXTRACT TIMM OUTPUT] Length of list/tuple: {len(potential_features_from_backbone)}")
                 all_items_are_tensors = True
-                if not potential_features_from_backbone: # Empty list/tuple
+                if not potential_features_from_backbone: 
                     print(f"[DEBUG EXTRACT TIMM OUTPUT]   It's an EMPTY list/tuple.")
-                    all_items_are_tensors = False # Treat as failure for list of tensors check
+                    all_items_are_tensors = False 
                 for i_feat, feat_item in enumerate(potential_features_from_backbone):
                     if isinstance(feat_item, torch.Tensor):
                         print(f"[DEBUG EXTRACT TIMM OUTPUT]   Item {i_feat} is a Tensor with shape: {feat_item.shape}")
@@ -267,97 +287,43 @@ class HybridCNNTransformer(nn.Module):
                         print(f"[DEBUG EXTRACT TIMM OUTPUT]   Item {i_feat} is NOT a Tensor. Type: {type(feat_item)}")
                         all_items_are_tensors = False
                 
-                if all_items_are_tensors and potential_features_from_backbone: # Ensure not empty and all are tensors
+                if all_items_are_tensors and potential_features_from_backbone: 
                     raw_features_list = list(potential_features_from_backbone)
                     print(f"[DEBUG EXTRACT TIMM] Successfully got a list of {len(raw_features_list)} feature Tensors from timm backbone.")
                 else:
                     print(f"[DEBUG EXTRACT TIMM WARNING] Timm model returned a list/tuple, but it was empty or contained non-Tensor items.")
-                    raw_features_list = None # Mark as failed for this path
+                    raw_features_list = None 
 
             elif isinstance(potential_features_from_backbone, torch.Tensor):
                 print(f"[DEBUG EXTRACT TIMM OUTPUT] It's a single Tensor with shape: {potential_features_from_backbone.shape}")
                 print(f"[DEBUG EXTRACT TIMM WARNING] Timm model returned a single Tensor, not a list. Multi-scale fusion might not work as intended without multiple features.")
-                # If only one adaptor is expected and we got a single tensor, maybe we can use it.
                 if num_adaptors_expected == 1:
                     print(f"[DEBUG EXTRACT TIMM] Single adaptor expected, using the single Tensor output.")
                     raw_features_list = [potential_features_from_backbone]
                 else:
-                    raw_features_list = None # Mark as failed for multi-adaptor setup
+                    raw_features_list = None 
             else:
                 print(f"[DEBUG EXTRACT TIMM OUTPUT] It's something else unexpected. Cannot process.")
-                raw_features_list = None # Mark as failed
-            # +++ END OF DETAILED INSPECTION +++
+                raw_features_list = None 
         
         elif hasattr(self.feature_extractor_cnn, 'layer1') and hasattr(self.feature_extractor_cnn, 'layer4'): # ResNet-like
-            print(f"[DEBUG EXTRACT] Using ResNet-like feature extraction for {self.feature_extractor_cnn.__class__.__name__}.")
-            # --- Start ResNet Extraction Logic ---
-            resnet_features = []
-            x_f = self.feature_extractor_cnn.conv1(x_input_cnn)
-            x_f = self.feature_extractor_cnn.bn1(x_f)
-            x_f = self.feature_extractor_cnn.relu(x_f)
-            x_f = self.feature_extractor_cnn.maxpool(x_f)
-            
-            x_f = self.feature_extractor_cnn.layer1(x_f); resnet_features.append(x_f)
-            x_f = self.feature_extractor_cnn.layer2(x_f); resnet_features.append(x_f)
-            x_f = self.feature_extractor_cnn.layer3(x_f); resnet_features.append(x_f)
-            x_f = self.feature_extractor_cnn.layer4(x_f); resnet_features.append(x_f)
-            raw_features_list = resnet_features
-            # --- End ResNet Extraction Logic ---
-            print(f"[DEBUG EXTRACT RESNET] Backbone returned a list of {len(raw_features_list)} features.")
-            for i, feat in enumerate(raw_features_list):
-                print(f"[DEBUG EXTRACT RESNET]   Backbone feature {i} shape: {feat.shape}")
-
-        # Check if raw_features_list was successfully populated
-        if raw_features_list is None or not raw_features_list: # Check if None OR an empty list
-            print(f"[DEBUG EXTRACT ERROR] Feature extraction failed for {self.feature_extractor_cnn.__class__.__name__} OR resulted in an empty list. `raw_features_list` is problematic.")
-            dummy_list = []
-            for i in range(num_adaptors_expected):
-                adaptor_in_channels = self.multi_scale_fusion.adaptors[i].in_channels
-                dummy_h = max(1, x_input_cnn.shape[2] // (2**(i+2))) 
-                dummy_w = max(1, x_input_cnn.shape[3] // (2**(i+2)))
-                dummy_list.append(torch.zeros((x_input_cnn.shape[0], adaptor_in_channels, dummy_h, dummy_w), device=x_input_cnn.device))
-            raw_features_list = dummy_list # Overwrite with dummies
-            print(f"[DEBUG EXTRACT ERROR] Created {len(raw_features_list)} DUMMY feature tensors to proceed because previous extraction failed.")
-
-        # Now, a crucial check: Does the number of features match number of adaptors?
-        # This check is important even if dummies were created (they should match num_adaptors_expected)
-        if len(raw_features_list) != num_adaptors_expected:
-            print(f"[DEBUG EXTRACT MISMATCH!] Number of features in `raw_features_list` ({len(raw_features_list)}) != Number of adaptors expected ({num_adaptors_expected}).")
-            # This can happen if timm/resnet path gave a list, but its length is different.
-            if len(raw_features_list) > num_adaptors_expected:
-                print(f"[DEBUG EXTRACT MISMATCH!] Taking the last {num_adaptors_expected} features from the available {len(raw_features_list)}.")
-                raw_features_list = raw_features_list[-num_adaptors_expected:]
-            elif len(raw_features_list) < num_adaptors_expected: 
-                 print(f"[DEBUG EXTRACT MISMATCH!] Fewer features ({len(raw_features_list)}) than adaptors ({num_adaptors_expected}). Padding with zeros.")
-                 if raw_features_list: # If list is not empty, use last feature's props
-                     last_valid_feat = raw_features_list[-1]
-                     for i_pad in range(num_adaptors_expected - len(raw_features_list)):
-                         # Get expected channel from the adaptor that's missing a feature
-                         missing_adaptor_idx = len(raw_features_list) + i_pad
-                         expected_c = self.multi_scale_fusion.adaptors[missing_adaptor_idx].in_channels
-                         # Create a zero tensor with the expected channels and similar H,W to last valid feature
-                         raw_features_list.append(torch.zeros((last_valid_feat.shape[0], expected_c, last_valid_feat.shape[2], last_valid_feat.shape[3]), device=x_input_cnn.device))
-                 else: # List was empty, and somehow dummy creation above didn't run or also failed.
-                      print(f"[DEBUG EXTRACT MISMATCH!] `raw_features_list` is EMPTY and fewer than adaptors. Creating all zeros.")
-                      for i_pad in range(num_adaptors_expected):
-                         expected_c = self.multi_scale_fusion.adaptors[i_pad].in_channels
-                         dummy_h = max(1, x_input_cnn.shape[2] // (2**(i_pad+2))) 
-                         dummy_w = max(1, x_input_cnn.shape[3] // (2**(i_pad+2)))
-                         raw_features_list.append(torch.zeros((x_input_cnn.shape[0], expected_c, dummy_h, dummy_w), device=x_input_cnn.device))
+            print(f"[DEBUG EXTRACT] Path taken: ResNet-like feature extraction for {self.feature_extractor_cnn.__class__.__name__}.")
+            # ... (your ResNet extraction logic) ...
+            # ... (ensure it populates raw_features_list correctly) ...
+        else:
+            print(f"[DEBUG EXTRACT] Path taken: Fallback - No specific timm or ResNet path matched for {self.feature_extractor_cnn.__class__.__name__}.")
+            # This path might be hit if is_timm_features_model is unexpectedly false.
 
 
-        # Final check before passing to fusion - ensure all elements are tensors
-        if not all(isinstance(f, torch.Tensor) for f in raw_features_list):
-            print("[DEBUG EXTRACT CRITICAL ERROR] `raw_features_list` (len {len(raw_features_list)}) contains non-Tensor elements before fusion!")
-            # Fallback to a single dummy tensor that multi_scale_fusion will process (likely poorly)
-            # The out_dim for MultiScaleFeatureExtractor is self.feature_dim
-            return torch.zeros((x_input_cnn.shape[0], self.feature_dim, 
-                                max(1, x_input_cnn.shape[2]//32), 
-                                max(1, x_input_cnn.shape[3]//32)), 
-                               device=x_input_cnn.device)
+        # ... (rest of the function: dummy creation if raw_features_list is None, mismatch checks, fusion call) ...
+        # (The dummy creation logic and mismatch checks are important fallbacks but our goal is to avoid them)
 
-        print(f"[DEBUG EXTRACT] Calling multi_scale_fusion with a list of {len(raw_features_list)} features. First feature shape (if any): {raw_features_list[0].shape if raw_features_list else 'N/A'}")
-        fused_spatial_features = self.multi_scale_fusion(raw_features_list)
+        # --- At the end of the function, before `return fused_spatial_features` ---
+        # print(f"[DEBUG EXTRACT FINAL] `raw_features_list` being passed to fusion has {len(raw_features_list) if raw_features_list else 'None/Empty'} items.")
+        # for i, item in enumerate(raw_features_list if raw_features_list else []):
+        #    print(f"[DEBUG EXTRACT FINAL]   Item {i} shape: {item.shape if isinstance(item, torch.Tensor) else type(item)}")
+        
+        fused_spatial_features = self.multi_scale_fusion(raw_features_list if raw_features_list else []) # Ensure it gets a list
         return fused_spatial_features
 
     def forward(self, frames, diffs, flows=None):
