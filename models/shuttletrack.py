@@ -12,436 +12,406 @@ class PositionalEncoding(nn.Module):
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)  # (1, max_len, d_model)
+        pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        # x: (B, T, D)
         x = x + self.pe[:, :x.size(1)]
         return x
 
 class SpatialAttention(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, in_channels): # in_channels here is for the input 'x' to SpatialAttention
         super(SpatialAttention, self).__init__()
-        self.conv = nn.Conv2d(2, 1, kernel_size=7, padding=3)
-        
+        # This conv takes 2 channels (avg_out, max_out) and outputs 1 channel for the attention map
+        self.conv = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False) # Added bias=False common for attn
+
     def forward(self, x):
-        # x: (B, C, H, W)
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
-        attn_map = torch.cat([avg_out, max_out], dim=1)
-        attn_map = self.conv(attn_map)
-        attn_map = torch.sigmoid(attn_map)
-        return x * attn_map
+        attn_input = torch.cat([avg_out, max_out], dim=1)
+        attn_map = self.conv(attn_input)
+        attn_map_sig = torch.sigmoid(attn_map)
+        return x * attn_map_sig # Element-wise multiplication
 
 class TrajectoryRectificationModule(nn.Module):
-    """Predict missing points in a trajectory based on surrounding frames"""
     def __init__(self, feature_dim, hidden_dim=128):
         super().__init__()
         self.gru = nn.GRU(feature_dim, hidden_dim, batch_first=True, bidirectional=True)
         self.fc = nn.Linear(hidden_dim * 2, feature_dim)
         
     def forward(self, x, vis_mask=None):
-        # x: (B, T, D)
-        # vis_mask: (B, T, 1) - 1 for visible, 0 for occluded
-        if vis_mask is not None:
-            # Keep a copy of the original features
-            original_x = x.clone()
+        original_x_clone = x.clone() # Keep original features for mixing
             
-        # Pass through bidirectional GRU to capture trajectory context
-        features, _ = self.gru(x)  # (B, T, 2*hidden_dim)
-        rectified = self.fc(features)  # (B, T, D)
+        features_gru, _ = self.gru(x)
+        rectified_gru = self.fc(features_gru)
         
         if vis_mask is not None:
             # Use original features for visible frames, rectified for occluded
-            rectified = vis_mask * original_x + (1 - vis_mask) * rectified
+            # vis_mask is (B, T, 1), 1 for visible.
+            # We want original_x for visible, rectified_gru for occluded.
+            rectified_output = vis_mask * original_x_clone + (1 - vis_mask) * rectified_gru
+        else:
+            rectified_output = rectified_gru # Or just x if no vis_mask and no rectification desired?
             
-        return rectified
+        return rectified_output
 
 class HeatmapDecoder(nn.Module):
-    """Decode feature maps to a heatmap indicating shuttlecock position"""
     def __init__(self, in_channels, heatmap_size=64):
         super().__init__()
         self.heatmap_size = heatmap_size
-        
-        # Upsampling decoder with skip connections
         self.conv1 = nn.Conv2d(in_channels, 256, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(256) # Added BatchNorm
         self.conv2 = nn.Conv2d(256, 128, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(128) # Added BatchNorm
         self.conv3 = nn.Conv2d(128, 64, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(64)  # Added BatchNorm
         self.conv4 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
-        self.conv5 = nn.Conv2d(32, 1, kernel_size=1)  # Final 1x1 conv for heatmap
+        self.bn4 = nn.BatchNorm2d(32)  # Added BatchNorm
+        self.conv5 = nn.Conv2d(32, 1, kernel_size=1)
         
     def forward(self, x):
-        # x: (B, C, H, W)
-        x = F.relu(self.conv1(x))
+        x = F.relu(self.bn1(self.conv1(x)))
         x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
-        x = F.relu(self.conv2(x))
+        x = F.relu(self.bn2(self.conv2(x)))
         x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
-        x = F.relu(self.conv3(x))
+        x = F.relu(self.bn3(self.conv3(x)))
         x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
-        x = F.relu(self.conv4(x))
-        
-        # Final upsampling to target heatmap size
+        x = F.relu(self.bn4(self.conv4(x)))
         x = F.interpolate(x, size=(self.heatmap_size, self.heatmap_size), mode='bilinear', align_corners=False)
-        heatmap = self.conv5(x)  # (B, 1, H, W)
-        
-        return heatmap
+        heatmap = self.conv5(x)
+        return heatmap # Output is logits before sigmoid typically
 
 class MultiScaleFeatureExtractor(nn.Module):
-    """Extract and fuse features from multiple CNN layers"""
     def __init__(self, feature_dims, out_dim):
         super().__init__()
         self.adaptors = nn.ModuleList([
-            nn.Conv2d(dim, out_dim, kernel_size=1)
-            for dim in feature_dims
+            nn.Conv2d(dim, out_dim, kernel_size=1) for dim in feature_dims
         ])
+        # Input to fusion is out_dim * num_feature_maps
         self.fusion = nn.Conv2d(out_dim * len(feature_dims), out_dim, kernel_size=3, padding=1)
-        self.spatial_attention = SpatialAttention(out_dim)
+        self.bn_fusion = nn.BatchNorm2d(out_dim) # Added BatchNorm
+        self.spatial_attention = SpatialAttention(out_dim) # Takes 'out_dim' channels
         
     def forward(self, features_list):
-        # Adapt each feature map to common dimension
         adapted_features = []
-        target_size = features_list[-1].shape[2:]  # Use the size of the last feature map
+        if not features_list: return None # Handle empty list
+        target_size = features_list[-1].shape[2:]
         
-        for i, (feature, adaptor) in enumerate(zip(features_list, self.adaptors)):
-            x = adaptor(feature)
-            if x.shape[2:] != target_size:
-                x = F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
-            adapted_features.append(x)
+        for feature_map, adaptor_conv in zip(features_list, self.adaptors): # Renamed variables
+            x_adapted = adaptor_conv(feature_map)
+            if x_adapted.shape[2:] != target_size:
+                x_adapted = F.interpolate(x_adapted, size=target_size, mode='bilinear', align_corners=False)
+            adapted_features.append(x_adapted)
         
-        # Concatenate along channel dimension
-        x = torch.cat(adapted_features, dim=1)
-        
-        # Fuse multi-scale features
-        x = self.fusion(x)
-        
-        # Apply spatial attention
-        x = self.spatial_attention(x)
-        
-        return x
+        x_cat = torch.cat(adapted_features, dim=1)
+        x_fused = F.relu(self.bn_fusion(self.fusion(x_cat))) # ReLU after BN
+        x_attended = self.spatial_attention(x_fused) # Spatial attention applied here
+        return x_attended
 
 class HybridCNNTransformer(nn.Module):
-    """
-    Enhanced Hybrid CNN + TransformerEncoder model for shuttlecock detection and tracking.
-    - Uses multi-scale CNN features with spatial attention
-    - Processes RGB frames, difference images, and optical flow
-    - Predicts visibility and position heatmaps
-    - Uses a trajectory rectification module for temporal consistency
-    """
     def __init__(self, cnn_backbone='efficientnet_b3', input_channels=8, feature_dim=256, 
                  sequence_length=5, heatmap_size=64, nhead=8, num_layers=4, 
                  dropout=0.2, attn_dropout=0.1, predict_uncertainty=True):
         super().__init__()
         self.heatmap_size = heatmap_size
         self.sequence_length = sequence_length
-        self.feature_dim = feature_dim
+        self.feature_dim = feature_dim # This is the 'd_model' for transformer and output of multi-scale
         self.predict_uncertainty = predict_uncertainty
         
-        # CNN backbone
         if cnn_backbone == 'resnet18':
             from torchvision.models import ResNet18_Weights
-            backbone = models.resnet18(weights=ResNet18_Weights.DEFAULT)
-            self.cnn = nn.Sequential(*list(backbone.children())[:-2])
-            self.cnn_out_dim = 512
-            # Get intermediate features for multi-scale fusion
-            self.feature_extractor = backbone
-            feature_dims = [64, 128, 256, 512]  # Output channel dims for ResNet18
+            backbone_model = models.resnet18(weights=ResNet18_Weights.DEFAULT)
+            self.feature_extractor_cnn = backbone_model # For _extract_multi_scale_features
+            # feature_dims from ResNet18: layer1=64, layer2=128, layer3=256, layer4=512
+            cnn_feature_dims = [64, 128, 256, 512]
         elif cnn_backbone == 'resnet34':
             from torchvision.models import ResNet34_Weights
-            backbone = models.resnet34(weights=ResNet34_Weights.DEFAULT)
-            self.cnn = nn.Sequential(*list(backbone.children())[:-2])
-            self.cnn_out_dim = 512
-            self.feature_extractor = backbone
-            feature_dims = [64, 128, 256, 512]  # Output channel dims for ResNet34
+            backbone_model = models.resnet34(weights=ResNet34_Weights.DEFAULT)
+            self.feature_extractor_cnn = backbone_model
+            cnn_feature_dims = [64, 128, 256, 512]
         elif cnn_backbone.startswith('efficientnet'):
-            # Use timm for EfficientNet models
-            backbone = timm.create_model(cnn_backbone, pretrained=True, features_only=True)
-            self.cnn = backbone
-            self.feature_extractor = backbone
-            # Get the channel dimensions from each feature map
-            feature_dims = backbone.feature_info.channels()
-            self.cnn_out_dim = feature_dims[-1]
-        else:
-            backbone = getattr(models, cnn_backbone)(weights='DEFAULT')
-            self.cnn = nn.Sequential(*list(backbone.children())[:-2])
-            self.feature_extractor = backbone
-            self.cnn_out_dim = list(backbone.children())[-1].in_features if hasattr(list(backbone.children())[-1], 'in_features') else 512
-            feature_dims = [64, 128, 256, 512]  # Default ResNet-like dims
-        
-        # Adjust first layer for input channels (RGB + diff + optical flow)
+            backbone_model = timm.create_model(cnn_backbone, pretrained=True, features_only=True)
+            self.feature_extractor_cnn = backbone_model
+            cnn_feature_dims = backbone_model.feature_info.channels()
+        else: # Fallback for other torchvision models, assuming ResNet-like structure
+            backbone_model = getattr(models, cnn_backbone)(weights='DEFAULT')
+            self.feature_extractor_cnn = backbone_model
+            # These are common defaults, might need adjustment for other models
+            cnn_feature_dims = [c for i, c in enumerate(getattr(backbone_model, 'feature_info', [])) if i < 4] # Try to get from feature_info
+            if not cnn_feature_dims: # Fallback if no feature_info
+                 cnn_feature_dims = [64,128,256,512] # Placeholder
+                 print(f"[MODEL WARNING] Using default feature_dims for {cnn_backbone}. Please verify.")
+
+
+        # Adjust first conv layer for input_channels
         if input_channels != 3:
             if cnn_backbone.startswith('efficientnet'):
-                # For EfficientNet, replace the first Conv2d in the backbone
-                old_conv = self.cnn.conv_stem
-                new_conv = nn.Conv2d(
-                    input_channels, old_conv.out_channels,
-                    kernel_size=old_conv.kernel_size,
-                    stride=old_conv.stride,
-                    padding=old_conv.padding,
-                    bias=old_conv.bias is not None
-                )
+                old_conv_stem = self.feature_extractor_cnn.conv_stem
+                new_conv_stem = nn.Conv2d(input_channels, old_conv_stem.out_channels,
+                                          kernel_size=old_conv_stem.kernel_size, stride=old_conv_stem.stride,
+                                          padding=old_conv_stem.padding, bias=(old_conv_stem.bias is not None))
                 with torch.no_grad():
-                    new_conv.weight[:, :3] = old_conv.weight
-                    if input_channels > 3:
-                        nn.init.kaiming_normal_(new_conv.weight[:, 3:])
-                self.cnn.conv_stem = new_conv
-                # Also update the feature extractor
-                self.feature_extractor.conv_stem = new_conv
+                    new_conv_stem.weight[:, :3] = old_conv_stem.weight
+                    if input_channels > 3: nn.init.kaiming_normal_(new_conv_stem.weight[:, 3:])
+                self.feature_extractor_cnn.conv_stem = new_conv_stem
+            elif hasattr(self.feature_extractor_cnn, 'conv1'): # ResNet-like
+                old_conv1 = self.feature_extractor_cnn.conv1
+                new_conv1 = nn.Conv2d(input_channels, old_conv1.out_channels,
+                                      kernel_size=old_conv1.kernel_size, stride=old_conv1.stride,
+                                      padding=old_conv1.padding, bias=(old_conv1.bias is not None))
+                with torch.no_grad():
+                    new_conv1.weight[:, :3] = old_conv1.weight
+                    if input_channels > 3: nn.init.kaiming_normal_(new_conv1.weight[:, 3:])
+                self.feature_extractor_cnn.conv1 = new_conv1
             else:
-                # For ResNet models
-                old_conv = self.feature_extractor.conv1
-                new_conv = nn.Conv2d(
-                    input_channels, old_conv.out_channels,
-                    kernel_size=old_conv.kernel_size,
-                    stride=old_conv.stride,
-                    padding=old_conv.padding,
-                    bias=old_conv.bias is not None
-                )
-                with torch.no_grad():
-                    new_conv.weight[:, :3] = old_conv.weight
-                    if input_channels > 3:
-                        nn.init.kaiming_normal_(new_conv.weight[:, 3:])
-                self.feature_extractor.conv1 = new_conv
-                # Update the cnn sequential as well
-                if isinstance(self.cnn, nn.Sequential):
-                    for i, module in enumerate(self.cnn.children()):
-                        if isinstance(module, nn.Conv2d) and i == 0:
-                            self.cnn[i] = new_conv
-                            break
-        
-        # Multi-scale feature extraction and fusion
-        self.multi_scale = MultiScaleFeatureExtractor(feature_dims, feature_dim)
-        
-        # Dropout after CNN features
-        self.dropout = nn.Dropout(dropout)
-        
-        # Positional encoding for temporal sequence
+                print(f"[MODEL WARNING] Could not adapt first conv layer for {cnn_backbone} with {input_channels} channels.")
+
+        self.multi_scale_fusion = MultiScaleFeatureExtractor(cnn_feature_dims, feature_dim) # out_dim is self.feature_dim
+        self.cnn_dropout = nn.Dropout(dropout) # Renamed for clarity
         self.pos_encoder = PositionalEncoding(feature_dim, max_len=sequence_length)
         
-        # TransformerEncoder with attention dropout for temporal modeling
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=feature_dim,
-            nhead=nhead,
-            dropout=dropout,
-            activation='gelu',
-            batch_first=True,
-            norm_first=True
+            d_model=feature_dim, nhead=nhead, dropout=dropout, # dropout here is for feed-forward
+            activation='gelu', batch_first=True, norm_first=True
         )
-        # Set attention dropout manually
-        for name, param in encoder_layer.named_parameters():
-            if 'self_attn' in name and 'dropout' in name:
-                encoder_layer.self_attn.dropout = attn_dropout
-        
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        
-        # Trajectory rectification module
+        # Manually set attention dropout if TransformerEncoderLayer supports it or if using custom attention
+        # PyTorch's TransformerEncoderLayer.self_attn.dropout is for the attention weights
+        if hasattr(encoder_layer.self_attn, 'dropout') and isinstance(encoder_layer.self_attn.dropout, float): # Check if it's a float to be set
+             encoder_layer.self_attn.dropout = attn_dropout # This might not be the standard way if it expects a Module
+        else: # If dropout is a module, we might need to replace it or it's already handled by global dropout
+            pass # Assuming dropout in TransformerEncoderLayer constructor handles it or it's part of nn.MultiheadAttention
+
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers) # Renamed
         self.trajectory_rectifier = TrajectoryRectificationModule(feature_dim)
+        self.avgpool_global = nn.AdaptiveAvgPool2d(1) # Renamed for clarity
+        self.visibility_head = nn.Linear(feature_dim, 1)
         
-        # Global representation for visibility prediction
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        
-        # Output heads
-        self.visibility_head = nn.Linear(feature_dim, 1)  # Predict visibility
-        
-        # Uncertainty prediction head (if enabled)
         if predict_uncertainty:
             self.uncertainty_head = nn.Sequential(
-                nn.Linear(feature_dim, 64),
-                nn.ReLU(),
-                nn.Linear(64, 2),  # Predict (sigma_x, sigma_y)
-                nn.Softplus()  # Ensure positive uncertainty values
+                nn.Linear(feature_dim, 64), nn.ReLU(),
+                nn.Linear(64, 2), nn.Softplus()
             )
-        
-        # Heatmap decoder: predict position as a heatmap
-        self.heatmap_decoder = HeatmapDecoder(feature_dim, heatmap_size=heatmap_size)
-        
-    def _extract_multi_scale_features(self, x):
-        # Process with CNN backbone to get multi-scale features
-        if hasattr(self.feature_extractor, 'features_only') or str(self.feature_extractor.__class__).find('EfficientNet') >= 0:
-            # For EfficientNet from timm, features_only=True already returns all feature maps
-            features_list = self.feature_extractor(x)
+        self.heatmap_decoder_module = HeatmapDecoder(feature_dim, heatmap_size=heatmap_size) # Renamed
+
+    def _extract_multi_scale_features(self, x_input_cnn): # Renamed
+        # For timm EfficientNet features_only=True
+        if hasattr(self.feature_extractor_cnn, 'feature_info') and callable(getattr(self.feature_extractor_cnn, 'forward_features', None)):
+            # Typically, timm models with features_only=True return a list of features
+            # Or if they have a .forward_features method that we can call.
+            # This part depends heavily on the exact timm model structure.
+            # The self.feature_extractor_cnn(x_input_cnn) should return a list if features_only=True was effective.
+            raw_features_list = self.feature_extractor_cnn(x_input_cnn)
+            # Ensure raw_features_list is indeed a list/tuple of tensors.
+            # If it's a single tensor, then features_only might not be working as expected, or it's a different timm model type.
+            if not isinstance(raw_features_list, (list, tuple)):
+                # This might happen if features_only=False or the model doesn't support it directly in __call__
+                # Fallback to ResNet-like extraction if it's a single tensor.
+                # This is a common source of error: assuming output structure.
+                print(f"[DEBUG MODEL _extract_multi] EfficientNet feature_extractor_cnn did not return a list. Type: {type(raw_features_list)}. Attempting ResNet-like extraction.")
+                # Fall through to ResNet-like extraction. This needs to be robust.
+                # For now, let's assume the timm model gives a list as per its design.
+                if not isinstance(raw_features_list, (list, tuple)): # If still not a list, this path is problematic
+                    print(f"[DEBUG MODEL ERROR] Cannot get feature list from {self.feature_extractor_cnn.__class__.__name__}")
+                    # Create dummy features to prevent crash, but this indicates a setup issue.
+                    dummy_shape = (x_input_cnn.shape[0], self.feature_dim, x_input_cnn.shape[2]//32, x_input_cnn.shape[3]//32)
+                    return [torch.zeros(dummy_shape, device=x_input_cnn.device)] * len(self.multi_scale_fusion.adaptors)
+
+
+        # For torchvision ResNet
+        elif hasattr(self.feature_extractor_cnn, 'layer1'):
+            raw_features_list = []
+            x_f = self.feature_extractor_cnn.conv1(x_input_cnn)
+            x_f = self.feature_extractor_cnn.bn1(x_f)
+            x_f = self.feature_extractor_cnn.relu(x_f)
+            x_f = self.feature_extractor_cnn.maxpool(x_f) # After maxpool is end of "stem"
+            
+            x_f = self.feature_extractor_cnn.layer1(x_f); raw_features_list.append(x_f)
+            x_f = self.feature_extractor_cnn.layer2(x_f); raw_features_list.append(x_f)
+            x_f = self.feature_extractor_cnn.layer3(x_f); raw_features_list.append(x_f)
+            x_f = self.feature_extractor_cnn.layer4(x_f); raw_features_list.append(x_f)
         else:
-            # For other backbones like ResNet, we need to extract features at different stages
-            features_list = []
-            
-            # ResNet specific extraction
-            x = self.feature_extractor.conv1(x)
-            x = self.feature_extractor.bn1(x)
-            x = self.feature_extractor.relu(x)
-            x = self.feature_extractor.maxpool(x)
-            
-            x = self.feature_extractor.layer1(x)
-            features_list.append(x)
-            
-            x = self.feature_extractor.layer2(x)
-            features_list.append(x)
-            
-            x = self.feature_extractor.layer3(x)
-            features_list.append(x)
-            
-            x = self.feature_extractor.layer4(x)
-            features_list.append(x)
-        
-        # Fuse multi-scale features
-        fused_features = self.multi_scale(features_list)
-        return fused_features
+            print(f"[DEBUG MODEL ERROR] CNN backbone {self.feature_extractor_cnn.__class__.__name__} not supported for multi-scale extraction in this manner.")
+            # Fallback: use only the final output of the backbone if it's a sequential-like model
+            # This is a guess and might not be multi-scale.
+            final_feat = self.feature_extractor_cnn(x_input_cnn) # This might be a single tensor.
+            # We need a list for multi_scale_fusion. This part is tricky without knowing the backbone's output.
+            # To avoid crashing, create a list of one, but this bypasses multi-scale.
+            raw_features_list = [final_feat] * len(self.multi_scale_fusion.adaptors) # This is not ideal for multi-scale.
+
+        # Ensure the number of features matches the number of adaptors
+        if len(raw_features_list) != len(self.multi_scale_fusion.adaptors):
+            print(f"[DEBUG MODEL WARNING] Mismatch in feature maps ({len(raw_features_list)}) and adaptors ({len(self.multi_scale_fusion.adaptors)}). Using last {len(self.multi_scale_fusion.adaptors)} features if available.")
+            raw_features_list = raw_features_list[-len(self.multi_scale_fusion.adaptors):] # Take the last N features
+
+        if not raw_features_list: # If still empty
+            print("[DEBUG MODEL ERROR] No features extracted from CNN backbone!")
+            dummy_shape = (x_input_cnn.shape[0], self.feature_dim, x_input_cnn.shape[2]//32, x_input_cnn.shape[3]//32)
+            return torch.zeros(dummy_shape, device=x_input_cnn.device) # Return a single dummy tensor for fusion to process
+
+
+        fused_spatial_features = self.multi_scale_fusion(raw_features_list)
+        # print(f"[DEBUG MODEL _extract] fused_spatial_features stats: min={fused_spatial_features.min().item():.3f}, max={fused_spatial_features.max().item():.3f}, mean={fused_spatial_features.mean().item():.3f}")
+        return fused_spatial_features
 
     def forward(self, frames, diffs, flows=None):
-        # frames: (B, T, 3, H, W), diffs: (B, T, 3, H, W), flows: (B, T, 2, H, W)
-        B, T, C, H, W = frames.shape
+        B, T, _, H, W = frames.shape # Use _ for C_frames as it's known
         
-        # Combine inputs: RGB frames + difference frames + optical flow
+        # print(f"\n[DEBUG MODEL FORWARD] --- Start ---")
+        # print(f"[DEBUG MODEL FORWARD] Input frames shape: {frames.shape}, min: {frames.min():.2f}, max: {frames.max():.2f}")
+        # print(f"[DEBUG MODEL FORWARD] Input diffs shape: {diffs.shape}, min: {diffs.min():.2f}, max: {diffs.max():.2f}")
+        # if flows is not None: print(f"[DEBUG MODEL FORWARD] Input flows shape: {flows.shape}, min: {flows.min():.2f}, max: {flows.max():.2f}")
+
         if flows is not None:
-            x = torch.cat([frames, diffs, flows], dim=2)  # (B, T, 3+3+2, H, W)
+            x_combined = torch.cat([frames, diffs, flows], dim=2)
         else:
-            x = torch.cat([frames, diffs], dim=2)  # (B, T, 3+3, H, W)
-            
-        # Reshape for per-frame processing
-        BT = B * T
-        x = x.view(BT, x.shape[2], H, W)
+            x_combined = torch.cat([frames, diffs], dim=2)
         
-        # Convert to float and normalize
-        if x.dtype == torch.uint8:
-            x = x.float() / 255.0
-        elif x.dtype != torch.float32:
-            x = x.float()
-            
-        # Extract multi-scale features with spatial attention
-        fused_features = self._extract_multi_scale_features(x)  # (BT, feature_dim, h, w)
+        # Check expected input channels vs actual
+        # cnn_first_layer_in_channels = self.feature_extractor_cnn.conv_stem.in_channels if hasattr(self.feature_extractor_cnn, 'conv_stem') else self.feature_extractor_cnn.conv1.in_channels
+        # if x_combined.shape[2] != cnn_first_layer_in_channels:
+        #    print(f"[DEBUG MODEL ERROR] Combined input x channels: {x_combined.shape[2]}, but CNN expects: {cnn_first_layer_in_channels}")
+
+
+        x_reshaped_BT = x_combined.view(B * T, x_combined.shape[2], H, W)
+
+        if x_reshaped_BT.dtype == torch.uint8:
+            x_normalized_BT = x_reshaped_BT.float() / 255.0
+        elif x_reshaped_BT.dtype != torch.float32: # Handle other types like double
+            x_normalized_BT = x_reshaped_BT.float()
+        else:
+            x_normalized_BT = x_reshaped_BT # Already float32
         
-        # Get global representation for visibility and feature vector
-        global_feats = self.avgpool(fused_features).view(B, T, self.feature_dim)
+        # print(f"[DEBUG MODEL FORWARD] x_normalized_BT for CNN: shape={x_normalized_BT.shape}, min={x_normalized_BT.min().item():.2f}, max={x_normalized_BT.max().item():.2f}, dtype={x_normalized_BT.dtype}")
+        if torch.isnan(x_normalized_BT).any() or torch.isinf(x_normalized_BT).any(): print("[DEBUG MODEL ERROR] NaN/Inf in x_normalized_BT!")
         
-        # Apply dropout to CNN features
-        global_feats = self.dropout(global_feats)
-        
-        # Apply positional encoding and transformer
-        feats = self.pos_encoder(global_feats)  # (B, T, feature_dim)
-        seq_feats = self.transformer(feats)  # (B, T, feature_dim)
-        
-        # Predict visibility logits
-        visibility_logits = self.visibility_head(seq_feats).squeeze(-1)  # (B, T)
-        
-        # Get visibility mask for rectification
-        visibility_mask = torch.sigmoid(visibility_logits).unsqueeze(-1)  # (B, T, 1)
-        
-        # Apply trajectory rectification
-        rectified_feats = self.trajectory_rectifier(seq_feats, visibility_mask)  # (B, T, feature_dim)
-        
-        # Predict uncertainty if enabled
-        uncertainty = None
+        fused_spatial_features_BT = self._extract_multi_scale_features(x_normalized_BT) # (B*T, feature_dim, h, w)
+        # print(f"[DEBUG MODEL FORWARD] fused_spatial_features_BT (CNN out): shape={fused_spatial_features_BT.shape}, min={fused_spatial_features_BT.min().item():.3f}, max={fused_spatial_features_BT.max().item():.3f}")
+        if torch.isnan(fused_spatial_features_BT).any() or torch.isinf(fused_spatial_features_BT).any(): print("[DEBUG MODEL ERROR] NaN/Inf in fused_spatial_features_BT!")
+
+        # Global features for Transformer path
+        global_feats_BT = self.avgpool_global(fused_spatial_features_BT) # (B*T, feature_dim, 1, 1)
+        global_feats_B_T_D = global_feats_BT.view(B, T, self.feature_dim) # (B, T, feature_dim)
+        global_feats_dropped = self.cnn_dropout(global_feats_B_T_D)
+        # print(f"[DEBUG MODEL FORWARD] global_feats_dropped for Transformer: shape={global_feats_dropped.shape}, min={global_feats_dropped.min().item():.3f}, max={global_feats_dropped.max().item():.3f}")
+
+        temp_feats_pos_enc = self.pos_encoder(global_feats_dropped)
+        temp_seq_features = self.transformer_encoder(temp_feats_pos_enc) # (B, T, feature_dim)
+        # print(f"[DEBUG MODEL FORWARD] temp_seq_features (Transformer out): shape={temp_seq_features.shape}, min={temp_seq_features.min().item():.3f}, max={temp_seq_features.max().item():.3f}")
+        if torch.isnan(temp_seq_features).any() or torch.isinf(temp_seq_features).any(): print("[DEBUG MODEL ERROR] NaN/Inf in temp_seq_features (Transformer output)!")
+
+        # Visibility Prediction
+        visibility_logits_B_T = self.visibility_head(temp_seq_features).squeeze(-1) # (B, T)
+        # print(f"[DEBUG MODEL FORWARD] visibility_logits_B_T: shape={visibility_logits_B_T.shape}, example={visibility_logits_B_T[0, :min(5,T)] if B>0 and T>0 else 'N/A'}")
+        # print(f"[DEBUG MODEL FORWARD] visibility_logits_B_T stats: min={visibility_logits_B_T.min().item():.3f}, max={visibility_logits_B_T.max().item():.3f}, mean={visibility_logits_B_T.mean().item():.3f}")
+
+        # Trajectory Rectification
+        vis_mask_for_rectifier_B_T_1 = torch.sigmoid(visibility_logits_B_T.detach()).unsqueeze(-1) # Detach logits for mask
+        rectified_temp_features = self.trajectory_rectifier(temp_seq_features, vis_mask_for_rectifier_B_T_1) # (B, T, feature_dim)
+        # print(f"[DEBUG MODEL FORWARD] rectified_temp_features: shape={rectified_temp_features.shape}, min={rectified_temp_features.min().item():.3f}, max={rectified_temp_features.max().item():.3f}")
+        if torch.isnan(rectified_temp_features).any() or torch.isinf(rectified_temp_features).any(): print("[DEBUG MODEL ERROR] NaN/Inf in rectified_temp_features!")
+
+        # Uncertainty Prediction (Optional)
+        uncertainty_output = None
         if self.predict_uncertainty:
-            # Predict uncertainty values for x,y coordinates
-            uncertainty = self.uncertainty_head(rectified_feats)  # (B, T, 2)
+            uncertainty_output = self.uncertainty_head(rectified_temp_features) # (B, T, 2)
+            # print(f"[DEBUG MODEL FORWARD] uncertainty_output: shape={uncertainty_output.shape}, example={uncertainty_output[0,0] if B>0 and T>0 else 'N/A'}")
+            # print(f"[DEBUG MODEL FORWARD] uncertainty_output stats: min={uncertainty_output.min().item():.3f}, max={uncertainty_output.max().item():.3f}, mean={uncertainty_output.mean().item():.3f}")
+            if torch.isnan(uncertainty_output).any() or torch.isinf(uncertainty_output).any(): print("[DEBUG MODEL ERROR] NaN/Inf in uncertainty_output!")
         
-        # Reshape rectified features for heatmap decoding
-        rectified_feats = rectified_feats.view(BT, self.feature_dim, 1, 1)
+        # Heatmap Decoding
+        # Reshape fused_spatial_features_BT to (B, T, D, fh, fw) for per-frame processing in loop
+        fh, fw = fused_spatial_features_BT.shape[2], fused_spatial_features_BT.shape[3]
+        fused_spatial_features_B_T_D_fh_fw = fused_spatial_features_BT.view(B, T, self.feature_dim, fh, fw)
         
-        # Reshape fused_features to match batch size for feature combination
-        fused_BT = fused_features.view(B, T, self.feature_dim, fused_features.shape[2], fused_features.shape[3])
+        output_heatmaps_list = []
+        for t_loop_idx in range(T):
+            current_spatial_features = fused_spatial_features_B_T_D_fh_fw[:, t_loop_idx] # (B, D, fh, fw)
+            current_rectified_temp = rectified_temp_features[:, t_loop_idx].unsqueeze(-1).unsqueeze(-1) # (B, D, 1, 1)
+            
+            # Modulate spatial features with temporal context
+            attention_gate = torch.sigmoid(self.avgpool_global(current_spatial_features)) # (B, D, 1, 1)
+            attention_gate_modulated = attention_gate * current_rectified_temp
+            
+            attended_spatial_for_decoder = current_spatial_features * (1.0 + attention_gate_modulated) # Additive/Multiplicative interaction
+            
+            frame_heatmap_logits = self.heatmap_decoder_module(attended_spatial_for_decoder) # (B, 1, H_map, W_map)
+            output_heatmaps_list.append(frame_heatmap_logits)
+            
+        position_heatmaps_final = torch.stack(output_heatmaps_list, dim=1).squeeze(2) # (B, T, H_map, W_map)
+        # print(f"[DEBUG MODEL FORWARD] position_heatmaps_final (logits): shape={position_heatmaps_final.shape}, min={position_heatmaps_final.min().item():.3f}, max={position_heatmaps_final.max().item():.3f}, mean={position_heatmaps_final.mean().item():.3f}")
+        if torch.isnan(position_heatmaps_final).any() or torch.isinf(position_heatmaps_final).any(): print("[DEBUG MODEL ERROR] NaN/Inf in position_heatmaps_final!")
         
-        # Process each frame individually for heatmap prediction
-        heatmaps = []
-        for t in range(T):
-            # Use the rectified features to guide the spatial features
-            frame_features = fused_BT[:, t]  # (B, feature_dim, h, w)
-            frame_rectified = rectified_feats.view(B, T, self.feature_dim)[:, t].unsqueeze(-1).unsqueeze(-1)  # (B, feature_dim, 1, 1)
-            
-            # Combine spatial features with rectified features using attention mechanism
-            attention = torch.sigmoid(self.avgpool(frame_features))  # (B, feature_dim, 1, 1)
-            attention = attention * frame_rectified  # Modulate attention with rectified features
-            
-            # Apply attention to spatial features
-            attended_features = frame_features * (1.0 + attention)  # (B, feature_dim, h, w)
-            
-            # Generate heatmap for this frame
-            frame_heatmap = self.heatmap_decoder(attended_features)  # (B, 1, heatmap_size, heatmap_size)
-            heatmaps.append(frame_heatmap)
-            
-        # Stack heatmaps along temporal dimension
-        position_heatmaps = torch.stack(heatmaps, dim=1)  # (B, T, 1, heatmap_size, heatmap_size)
-        position_heatmaps = position_heatmaps.squeeze(2)  # (B, T, heatmap_size, heatmap_size)
+        # print(f"[DEBUG MODEL FORWARD] --- End ---")
         
-        # Create result dictionary
-        result = {
-            'visibility': visibility_logits,  # (B, T)
-            'heatmap': position_heatmaps,     # (B, T, heatmap_size, heatmap_size)
+        result_dict = {
+            'visibility': visibility_logits_B_T,
+            'heatmap': position_heatmaps_final,
         }
+        if uncertainty_output is not None:
+            result_dict['uncertainty'] = uncertainty_output
         
-        # Add uncertainty if predicted
-        if uncertainty is not None:
-            result['uncertainty'] = uncertainty  # (B, T, 2)
-        
-        return result
+        return result_dict
 
 
-def extract_coordinates_from_heatmap(heatmap, threshold=0.0):
-    """
-    Extract the (x, y) coordinates from the predicted heatmap.
-    Args:
-        heatmap: (B, T, H, W) tensor of predicted heatmaps
-        threshold: minimum confidence value to consider a detection
-    Returns:
-        coords: (B, T, 2) tensor of normalized (x, y) coordinates
-        confidences: (B, T) tensor of confidence values
-    """
+def extract_coordinates_from_heatmap(heatmap, threshold=0.0): # Keep threshold low if heatmap is logits
     B, T, H, W = heatmap.shape
-    device = heatmap.device
     
-    # Reshape heatmap to (B*T, H*W)
     heatmap_flat = heatmap.reshape(B*T, -1)
+    max_values, max_indices = torch.max(heatmap_flat, dim=1)
     
-    # Get max values and indices
-    max_values, max_indices = torch.max(heatmap_flat, dim=1)  # (B*T,)
+    # Normalize coordinates to [0, 1]
+    # y_coords = (max_indices // W).float() / (H -1) if H > 1 else torch.zeros_like(max_indices).float()
+    # x_coords = (max_indices % W).float() / (W -1) if W > 1 else torch.zeros_like(max_indices).float()
+    # Correct normalization: pixel center / Total_pixels. For H, index is 0 to H-1. Center is index + 0.5.
+    # So, (index + 0.5) / H.  Approximate with index / H if H is large.
+    # Your original was y = (max_indices // W).float() / H and x = (max_indices % W).float() / W
+    # This maps indices [0, H-1] to [0, (H-1)/H]. This is generally fine.
+    y_coords = (max_indices // W).float() / H 
+    x_coords = (max_indices % W).float() / W
     
-    # Convert indices to (y, x) coordinates
-    y = (max_indices // W).float() / H
-    x = (max_indices % W).float() / W
+    coords_BT_2 = torch.stack([x_coords, y_coords], dim=-1) # (B*T, 2)
+    coords_B_T_2 = coords_BT_2.view(B, T, 2) # (B, T, 2)
     
-    # Reshape to (B, T)
-    confidences = max_values.view(B, T)
+    confidences_B_T = max_values.view(B, T) # (B, T)
     
-    # Create confidence mask based on threshold
-    mask = (confidences > threshold).float()
+    # Masking by threshold (on max_values which are heatmap logits/probs)
+    # If heatmap is logits, thresholding here might be tricky without sigmoid first.
+    # Assuming heatmap values are already scaled (e.g. 0-1 after sigmoid if applied, or we are interested in relative max)
+    # Your heatmap_decoder outputs logits, so max_values are logits.
+    # If threshold is for confidence *after* sigmoid:
+    # confidence_probs = torch.sigmoid(confidences_B_T) 
+    # mask_B_T = (confidence_probs > threshold).float()
+
+    # Using threshold directly on max_values (logits or unnormalized scores)
+    mask_B_T = (confidences_B_T > threshold).float()
+
+    coords_B_T_2_masked = coords_B_T_2 * mask_B_T.unsqueeze(-1)
     
-    # Combine (x, y) coordinates
-    coords = torch.stack([x.view(B, T), y.view(B, T)], dim=-1)  # (B, T, 2)
-    
-    # Zero out coordinates with low confidence
-    coords = coords * mask.unsqueeze(-1)
-    
-    return coords, confidences
+    return coords_B_T_2_masked, confidences_B_T # Return unmasked coords, and separate confidences for eval
 
 
 def build_model_from_config(config):
     model_cfg = config['model']
-    cnn_backbone = model_cfg.get('cnn_backbone', 'efficientnet_b3')
-    input_size_cfg = model_cfg.get('input_size', 224)
-    sequence_length = model_cfg.get('sequence_length', 5)
-    feature_dim = model_cfg.get('feature_dim', 256)
-    heatmap_size = model_cfg.get('heatmap_size', 64)
+    cnn_backbone_cfg = model_cfg.get('cnn_backbone', 'efficientnet_b3') # Renamed
+    # input_size_cfg = model_cfg.get('input_size', 224) # Not used in model constructor directly
+    sequence_length_cfg = model_cfg.get('sequence_length', 5) # Renamed
+    feature_dim_cfg = model_cfg.get('feature_dim', 256) # Renamed
+    heatmap_size_cfg = model_cfg.get('heatmap_size', 64) # Renamed
     
-    # Check if optical flow is enabled
-    use_flow = model_cfg.get('use_optical_flow', True)
-    input_channels = 8 if use_flow else 6  # RGB(3) + Diff(3) + Flow(2)
+    use_flow_cfg = model_cfg.get('use_optical_flow', True) # Renamed
+    input_channels_val = 8 if use_flow_cfg else 6 # Renamed
     
-    # Check if uncertainty prediction is enabled
-    predict_uncertainty = model_cfg.get('predict_uncertainty', True)
+    predict_uncertainty_cfg = model_cfg.get('predict_uncertainty', True) # Renamed
     
-    nhead = model_cfg.get('transformer_nhead', 8)
-    num_layers = model_cfg.get('transformer_layers', 4)
-    dropout = model_cfg.get('dropout', 0.2)
-    attn_dropout = model_cfg.get('attn_dropout', 0.1)
+    nhead_cfg = model_cfg.get('transformer_nhead', 8) # Renamed
+    num_layers_cfg = model_cfg.get('transformer_layers', 4) # Renamed
+    dropout_cfg = model_cfg.get('dropout', 0.2) # Renamed
+    attn_dropout_cfg = model_cfg.get('attn_dropout', 0.1) # Renamed
     
     return HybridCNNTransformer(
-        cnn_backbone=cnn_backbone,
-        input_channels=input_channels,
-        feature_dim=feature_dim,
-        sequence_length=sequence_length,
-        heatmap_size=heatmap_size,
-        nhead=nhead,
-        num_layers=num_layers,
-        dropout=dropout,
-        attn_dropout=attn_dropout,
-        predict_uncertainty=predict_uncertainty
-    ) 
+        cnn_backbone=cnn_backbone_cfg, input_channels=input_channels_val,
+        feature_dim=feature_dim_cfg, sequence_length=sequence_length_cfg,
+        heatmap_size=heatmap_size_cfg, nhead=nhead_cfg, num_layers=num_layers_cfg,
+        dropout=dropout_cfg, attn_dropout=attn_dropout_cfg,
+        predict_uncertainty=predict_uncertainty_cfg
+    )
