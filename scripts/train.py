@@ -310,7 +310,7 @@ def compute_losses(pred_dict, target, config, epoch=None, max_epochs=None):
 
 # --- Training loop ---
 # ... (train_one_epoch, validate, format_time remain largely the same, ensure they use the new return values from compute_losses)
-def train_one_epoch(model, loader, optimizer, device, config, epoch=None, max_epochs=None, batch_losses=None, batch_indices=None):
+def train_one_epoch(model, loader, optimizer, device, config, epoch=None, max_epochs=None, batch_losses=None, batch_indices=None, max_batches=None):
     model.train()
     running_total_loss = 0.0 # Use running sum for precision
     running_bce_loss = 0.0
@@ -319,6 +319,8 @@ def train_one_epoch(model, loader, optimizer, device, config, epoch=None, max_ep
     num_samples = 0
 
     for batch_idx, batch in enumerate(tqdm(loader, desc=f'Train Epoch {epoch}', leave=False)):
+        if max_batches is not None and batch_idx >= max_batches:
+            break
         frames = batch['frames'].to(device)
         diffs = batch['diffs'].to(device)
         flows = batch.get('flows')
@@ -332,7 +334,15 @@ def train_one_epoch(model, loader, optimizer, device, config, epoch=None, max_ep
         optimizer.zero_grad()
         
         pred = model(frames, diffs, flows)
-        
+
+        # Debug print for visibility labels and predictions (first batch only)
+        if batch_idx == 0:
+            vis_true = labels[..., 0]
+            vis_pred_logits = pred['visibility']
+            vis_pred_probs = torch.sigmoid(vis_pred_logits)
+            print("[DEBUG] vis_true (first batch):", vis_true.cpu().numpy())
+            print("[DEBUG] vis_pred (sigmoid, first batch):", vis_pred_probs.detach().cpu().numpy())
+
         # Check for NaNs in model predictions before loss calculation
         for key, value in pred.items():
             if torch.isnan(value).any():
@@ -380,7 +390,7 @@ def train_one_epoch(model, loader, optimizer, device, config, epoch=None, max_ep
            running_mse_loss / num_samples, running_smooth_loss / num_samples
 
 
-def validate(model, loader, device, config, epoch=None, max_epochs=None):
+def validate(model, loader, device, config, epoch=None, max_epochs=None, max_batches=None):
     model.eval()
     running_total_loss = 0.0
     running_bce_loss = 0.0
@@ -388,7 +398,9 @@ def validate(model, loader, device, config, epoch=None, max_epochs=None):
     running_smooth_loss = 0.0
     num_samples = 0
     with torch.no_grad():
-        for batch in tqdm(loader, desc='Valid', leave=False):
+        for batch_idx, batch in enumerate(tqdm(loader, desc='Valid', leave=False)):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
             frames = batch['frames'].to(device)
             diffs = batch['diffs'].to(device)
             flows = batch.get('flows')
@@ -424,6 +436,7 @@ def main():
     parser.add_argument('--resume', action='store_true', help='Resume training from last checkpoint')
     parser.add_argument('--curriculum', action='store_true', help='Enable curriculum learning')
     parser.add_argument('--hard-mining', action='store_true', help='Enable hard example mining')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode (limit batches per epoch)')
     args = parser.parse_args()
 
     config = load_config('config/shuttletrack.yaml')
@@ -528,6 +541,12 @@ def main():
     
     training_start_time = time.time()
 
+    if args.debug:
+        print('[DEBUG MODE] Limiting number of batches per epoch for fast iteration.')
+        max_batches = 2  # You can change this number as needed
+    else:
+        max_batches = None
+
     for epoch_num in range(start_epoch, num_epochs_cfg + 1): # Renamed
         epoch_start_time_loop = time.time() # Renamed
         print(f'\nEpoch {epoch_num}/{num_epochs_cfg}')
@@ -542,7 +561,8 @@ def main():
         train_loss_epoch, train_bce_epoch, train_mse_epoch, train_smooth_epoch = train_one_epoch(
             model, train_loader, optimizer, device, config, 
             epoch_num, num_epochs_cfg, 
-            batch_losses=batch_losses_list, batch_indices=batch_indices_list
+            batch_losses=batch_losses_list, batch_indices=batch_indices_list,
+            max_batches=max_batches
         )
         print("Train epoch done. Validating...")
         
@@ -551,7 +571,7 @@ def main():
             print(f"Hard mining: Tracking {len(train_set.hard_sample_indices)} samples")
         
         val_loss_epoch, val_bce_epoch, val_mse_epoch, val_smooth_epoch = validate(
-            model, valid_loader, device, config, epoch_num, num_epochs_cfg
+            model, valid_loader, device, config, epoch_num, num_epochs_cfg, max_batches=max_batches
         )
         print("Validation done. Evaluating on valid set...")
         
