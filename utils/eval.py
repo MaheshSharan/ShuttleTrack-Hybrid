@@ -132,7 +132,7 @@ def compute_heatmap_metrics(pred_heatmaps, true_heatmaps, visibility=None):
     return {'heatmap_mse': mse, 'heatmap_pck': pck}
 
 
-def evaluate(model, dataloader, device):
+def evaluate(model, dataloader, device, max_batches=None):
     print("[EVAL] Starting evaluation...")
     model.eval()
     all_pred_xy, all_true_xy = [], []
@@ -141,6 +141,9 @@ def evaluate(model, dataloader, device):
     
     with torch.no_grad():
         for i, batch in enumerate(dataloader):
+            if max_batches is not None and i >= max_batches:
+                print(f"[EVAL] Debug mode: Stopping after {max_batches} batches.")
+                break
             print(f"[EVAL] Processing batch {i+1}/{len(dataloader)}")
             frames = batch['frames'].to(device)
             diffs = batch['diffs'].to(device)

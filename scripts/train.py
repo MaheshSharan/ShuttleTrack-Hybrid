@@ -590,7 +590,7 @@ def main():
         )
         print("Validation done. Evaluating on valid set...")
         
-        val_metrics_epoch = evaluate(model, valid_loader, device) # Renamed
+        val_metrics_epoch = evaluate(model, valid_loader, device, max_batches=max_batches) # Renamed
         print("Evaluation done. Logging & checkpointing...")
         
         scheduler.step() # Step scheduler after optimizer.step() per epoch
