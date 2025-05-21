@@ -448,12 +448,14 @@ def main():
         difficulty_level=initial_difficulty,
         mixup_prob=config['training'].get('mixup_prob', 0.3), blur_prob=config['training'].get('blur_prob', 0.3),
         cutout_prob=config['training'].get('cutout_prob', 0.2),
-        curriculum_epoch=0 if args.curriculum else None, max_curriculum_epochs=max_curriculum_epochs
+        curriculum_epoch=0 if args.curriculum else None, max_curriculum_epochs=max_curriculum_epochs,
+        exclude_folders=config['data'].get('exclude_train_folders', [])
     )
     valid_set = ShuttleTrackDataset(
         config['data']['processed_dataset_path'], split='valid', 
         sequence_length=config['model']['sequence_length'], augment=False, input_size=input_size_tuple,
-        use_optical_flow=config['model'].get('use_optical_flow', True), use_heatmaps=True
+        use_optical_flow=config['model'].get('use_optical_flow', True), use_heatmaps=True,
+        exclude_folders=config['data'].get('exclude_valid_folders', [])
     )
     
     train_sampler = torch.utils.data.RandomSampler(train_set) if args.hard_mining else None

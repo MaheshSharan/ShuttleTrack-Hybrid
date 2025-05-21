@@ -14,7 +14,8 @@ class ShuttleTrackDataset(Dataset):
     def __init__(self, root_dir, split='train', sequence_length=5, augment=True, input_size=224, 
                  use_optical_flow=True, use_heatmaps=True, difficulty_level=None, 
                  mixup_prob=0.3, blur_prob=0.3, cutout_prob=0.2,
-                 curriculum_epoch=None, max_curriculum_epochs=20):
+                 curriculum_epoch=None, max_curriculum_epochs=20,
+                 exclude_folders=None):
         """
         Enhanced ShuttleTrack Dataset with advanced augmentation techniques.
         
@@ -32,6 +33,7 @@ class ShuttleTrackDataset(Dataset):
             cutout_prob: Probability of applying random cutout augmentation
             curriculum_epoch: Current epoch for curriculum learning
             max_curriculum_epochs: Number of epochs for curriculum progression
+            exclude_folders: List of folders to exclude from training
         """
         self.root_dir = root_dir
         self.split = split
@@ -45,6 +47,7 @@ class ShuttleTrackDataset(Dataset):
         self.curriculum_epoch = curriculum_epoch
         self.max_curriculum_epochs = max_curriculum_epochs
         self.difficulty_level = difficulty_level
+        self.exclude_folders = exclude_folders if exclude_folders is not None else []
         
         # Get samples based on difficulty if in curriculum learning mode
         self.samples = self._gather_samples()
@@ -117,6 +120,8 @@ class ShuttleTrackDataset(Dataset):
         samples = []
         split_dir = os.path.join(self.root_dir, self.split)
         for match in os.listdir(split_dir):
+            if match in self.exclude_folders:
+                continue
             match_dir = os.path.join(split_dir, match)
             if not os.path.isdir(match_dir):
                 continue

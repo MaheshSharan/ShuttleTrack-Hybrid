@@ -1,6 +1,9 @@
 data:
   processed_dataset_path: processed_data
   raw_dataset_path: ShuttleCockFrameDataset
+  exclude_train_folders: [match3, match4, match5, match6, match7, match8, match9, match10, match11, match12, match13, match14, match15, match16, match17, match18, match19, match20, match21, match22, match23, match24, match25, match26]  # e.g., [match1, match2]
+  exclude_valid_folders: [match2,match3]  # e.g., [match28, match29]
+
 device: cuda
 model:
   cnn_backbone: efficientnet_b3
@@ -16,10 +19,10 @@ model:
   predict_uncertainty: true
 training:
   batch_size: 4
-  learning_rate: 0.0001
-  weight_decay: 0.0001
+  learning_rate: 0.00001
+  weight_decay: 0.0
   epochs: 30
-  num_workers: 2
+  num_workers: 0
   gradient_clip_val: 1.0
   pin_memory: true
   
@@ -27,11 +30,11 @@ training:
   loss_weights:
     bce: 1.0
     focal_bce: 1.0
-    mse: 1.0
-    focal: 5.0
-    smooth: 0.2
+    mse: 10.0
+    focal: 0.0
+    smooth: 0.5
     smooth_l1: 1.0
-    uncertainty: 0.3
+    uncertainty: 0.0
   
   # Focal loss parameters
   focal_gamma: 2.0
