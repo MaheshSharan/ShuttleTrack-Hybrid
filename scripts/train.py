@@ -428,6 +428,12 @@ def main():
 
     config = load_config('config/shuttletrack.yaml')
 
+    # Print excluded folders for transparency
+    exclude_train = config['data'].get('exclude_train_folders', [])
+    exclude_valid = config['data'].get('exclude_valid_folders', [])
+    print(f"[INFO] Excluding the following match folders from TRAIN set: {exclude_train}")
+    print(f"[INFO] Excluding the following match folders from VALID set: {exclude_valid}")
+
     if args.kaggle:
         config['data']['processed_dataset_path'] = '/kaggle/input/shuttletrack-processed-data/processed_data'
         config['data']['raw_dataset_path'] = '/kaggle/input/shuttlecockframedataset'
