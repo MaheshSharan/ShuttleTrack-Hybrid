@@ -20,6 +20,21 @@ from tabulate import tabulate
 from datetime import timedelta
 import numpy as np
 
+class Logger(object):
+    def __init__(self, filename="train.log.txt"):
+        self.terminal = sys.stdout
+        self.log = open(filename, "a", buffering=1)  # line-buffered
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+sys.stdout = Logger("train.log.txt")
+
 # --- Utility functions ---
 def load_config(path):
     with open(path, 'r') as f:
@@ -645,7 +660,7 @@ def main():
         headers_table = ["Metric", "Train", "Valid", "Best Overall"] # Renamed
         table_data_list = [ # Renamed
             ["Total Loss", f"{train_loss_epoch:.4f}", f"{val_loss_epoch:.4f}", f"{best_metrics_overall['val_loss']:.4f}"],
-            ["BCE Loss", f"{train_bce_epoch:.4f}", f"{val_bce_epoch:.4f}", f"{best_metrics_overall.get('val_bce', float('inf')):.4f}"],
+            ["BCE Loss", f"{train_bce_epoch:.6f}", f"{val_bce_epoch:.6f}", f"{best_metrics_overall.get('val_bce', float('inf')):.6f}"],
             ["MSE Loss", f"{train_mse_epoch:.4f}", f"{val_mse_epoch:.4f}", f"{best_metrics_overall.get('val_mse', float('inf')):.4f}"],
             ["Dist Error", "-", f"{val_metrics_epoch.get('distance_error', float('inf')):.4f}", f"{best_metrics_overall.get('val_distance_error', float('inf')):.4f}"],
             ["Vis F1", "-", f"{val_metrics_epoch.get('visibility_f1', 0):.4f}", f"{best_metrics_overall.get('val_visibility_f1', 0):.4f}"],
