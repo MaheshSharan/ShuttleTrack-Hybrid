@@ -1,5 +1,6 @@
 # scripts/check_visibility_distribution.py
-import os
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import numpy as np
 from utils.dataset import ShuttleTrackDataset
 
