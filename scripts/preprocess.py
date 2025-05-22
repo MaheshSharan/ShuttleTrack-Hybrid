@@ -7,6 +7,7 @@ import yaml
 import shutil
 from PIL import Image
 from scipy.ndimage import gaussian_filter
+import argparse
 
 # Load config
 def load_config(path='config/shuttletrack.yaml'):
@@ -193,12 +194,14 @@ def verify_processed_segment(out_dir, frames_dir):
         print(f"[VERIFY] Error verifying segment: {e}")
         return False
 
-def process_split(split):
+def process_split(split, debug=False, max_matches=2):
     split_path = os.path.join(DATASET_ROOT, split)
     matches = [d for d in os.listdir(split_path) if d.startswith('match')]
     matches = [m for m in matches if m not in EXCLUDE_MATCHES]
-
-    for match in tqdm(matches, desc=f'Processing {split}', position=0, leave=True):
+    if debug:
+        matches = matches[:max_matches]
+        print(f"[DEBUG] Only processing {len(matches)} matches in {split}: {matches}")
+    for match in tqdm(matches, desc=f"{split} matches"):
         match_path = os.path.join(split_path, match)
         segments_dir = os.path.join(match_path, 'frames')
         if not os.path.exists(segments_dir):
@@ -241,8 +244,14 @@ def process_split(split):
         print(f"[INFO] Completed match: {match} with {total_frames} total frames\n")
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode (process only a few matches per split)')
+    args = parser.parse_args()
+    debug = args.debug
+    if debug:
+        print("[DEBUG MODE] Preprocessing will run on a small subset of matches for quick testing.")
     for split in SPLITS:
-        process_split(split)
+        process_split(split, debug=debug, max_matches=2)
     print('\n[SUCCESS] Preprocessing complete!')
 
 if __name__ == '__main__':
