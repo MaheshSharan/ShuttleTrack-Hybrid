@@ -194,64 +194,72 @@ def verify_processed_segment(out_dir, frames_dir):
         print(f"[VERIFY] Error verifying segment: {e}")
         return False
 
-def process_split(split, debug=False, max_matches=2):
+def process_split(split, debug=False, max_segments=2):
     split_path = os.path.join(DATASET_ROOT, split)
     matches = [d for d in os.listdir(split_path) if d.startswith('match')]
     matches = [m for m in matches if m not in EXCLUDE_MATCHES]
+    segments_to_process = []
     if debug:
-        matches = matches[:max_matches]
-        print(f"[DEBUG] Only processing {len(matches)} matches in {split}: {matches}")
-    for match in tqdm(matches, desc=f"{split} matches"):
+        # Collect up to max_segments segments across all matches
+        for match in matches:
+            match_path = os.path.join(split_path, match)
+            segments_dir = os.path.join(match_path, 'frames')
+            if not os.path.exists(segments_dir):
+                continue
+            segments = os.listdir(segments_dir)
+            for segment in segments:
+                segments_to_process.append((match, segment))
+                if len(segments_to_process) >= max_segments:
+                    break
+            if len(segments_to_process) >= max_segments:
+                break
+        print(f"[DEBUG] Only processing {len(segments_to_process)} segments in {split}: {segments_to_process}")
+    else:
+        # Process all segments in all matches
+        for match in matches:
+            match_path = os.path.join(split_path, match)
+            segments_dir = os.path.join(match_path, 'frames')
+            if not os.path.exists(segments_dir):
+                continue
+            segments = os.listdir(segments_dir)
+            for segment in segments:
+                segments_to_process.append((match, segment))
+    # Now process the selected segments
+    for match, segment in segments_to_process:
         match_path = os.path.join(split_path, match)
-        segments_dir = os.path.join(match_path, 'frames')
-        if not os.path.exists(segments_dir):
+        frames_dir = os.path.join(match_path, 'frames', segment)
+        csv_file = os.path.join(match_path, 'csv', f'{segment}_ball.csv')
+        if not os.path.exists(csv_file):
+            print(f"[WARNING] Missing CSV file for segment {segment}, skipping...")
             continue
-            
-        segments = os.listdir(segments_dir)
-        print(f"\n[INFO] Processing match: {match} ({len(segments)} segments)")
-        total_frames = 0
-        
-        for segment in tqdm(segments, desc=f'  Segments in {match}', position=1, leave=True):
-            frames_dir = os.path.join(match_path, 'frames', segment)
-            csv_file = os.path.join(match_path, 'csv', f'{segment}_ball.csv')
-            if not os.path.exists(csv_file):
-                print(f"[WARNING] Missing CSV file for segment {segment}, skipping...")
+        out_dir = os.path.join(OUTPUT_ROOT, split, match, segment)
+        # Check if already processed
+        if os.path.exists(out_dir):
+            if verify_processed_segment(out_dir, frames_dir):
+                print(f"[INFO] Segment {segment} already processed, skipping...")
+                with open(os.path.join(out_dir, 'metadata.yaml'), 'r') as f:
+                    metadata = yaml.safe_load(f)
                 continue
-                
-            out_dir = os.path.join(OUTPUT_ROOT, split, match, segment)
-            
-            # Check if already processed
-            if os.path.exists(out_dir):
-                if verify_processed_segment(out_dir, frames_dir):
-                    print(f"[INFO] Segment {segment} already processed, skipping...")
-                    with open(os.path.join(out_dir, 'metadata.yaml'), 'r') as f:
-                        metadata = yaml.safe_load(f)
-                        total_frames += metadata.get('num_frames', 0)
-                    continue
-                else:
-                    print(f"[WARNING] Segment {segment} verification failed, reprocessing...")
-                    shutil.rmtree(out_dir, ignore_errors=True)
-            
-            try:
-                num_frames = process_segment(frames_dir, csv_file, out_dir)
-                total_frames += num_frames
-            except Exception as e:
-                print(f"[ERROR] Failed to process segment {segment}: {str(e)}")
-                import traceback
-                traceback.print_exc()
-                continue
-                
-        print(f"[INFO] Completed match: {match} with {total_frames} total frames\n")
+            else:
+                print(f"[WARNING] Segment {segment} verification failed, reprocessing...")
+                shutil.rmtree(out_dir, ignore_errors=True)
+        try:
+            num_frames = process_segment(frames_dir, csv_file, out_dir)
+        except Exception as e:
+            print(f"[ERROR] Failed to process segment {segment}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            continue
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode (process only a few matches per split)')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode (process only a few segments per split)')
     args = parser.parse_args()
     debug = args.debug
     if debug:
-        print("[DEBUG MODE] Preprocessing will run on a small subset of matches for quick testing.")
+        print("[DEBUG MODE] Preprocessing will run on a small subset of segments for quick testing.")
     for split in SPLITS:
-        process_split(split, debug=debug, max_matches=2)
+        process_split(split, debug=debug, max_segments=2)
     print('\n[SUCCESS] Preprocessing complete!')
 
 if __name__ == '__main__':
